@@ -19,6 +19,10 @@ linear/docs/*
 notion/pages/*
 notion/databases/*
 
+# Your filled-in config (holds your Slack/Notion IDs, team key) — private.
+# Only config.example.yaml is tracked; your config.yaml never commits.
+config.yaml
+
 # Watermarks and per-source state
 **/.last-sync
 **/.last-ingest
