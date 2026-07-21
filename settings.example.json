@@ -1,0 +1,18 @@
+{
+  "//": "Merge these keys into your ~/.claude/settings.json (do NOT blindly overwrite the file — keep your existing keys).",
+
+  "//cleanupPeriodDays": "THE ONE NON-NEGOTIABLE. Claude Code's default 30-day transcript retention will DELETE your project memories (they live inside the transcript dir). 36500 = ~100 years = effectively never. Skipping this is how first-timers silently lose their raw memory layer.",
+  "cleanupPeriodDays": 36500,
+
+  "//permissions": "Optional: pre-allow the read-only sync/lint calls so you are not prompted constantly. Tighten or remove to taste.",
+  "permissions": {
+    "allow": [
+      "Bash(date -u:*)",
+      "Bash(find -L:*)",
+      "Bash(ls:*)",
+      "Bash(git status:*)",
+      "Bash(bash scripts/refresh-project-symlinks.sh)",
+      "Bash(bash scripts/linkrot-lint.sh)"
+    ]
+  }
+}

@@ -1,0 +1,45 @@
+# ============================================================================
+# LEAK PREVENTION — the whole point of this file.
+# The kit is MACHINERY. Your synced data and synthesized wiki are PRIVATE.
+# By default we ignore every raw layer AND the wiki so proprietary content
+# (partner names, deal figures, internal Slack/Linear/Notion) can never be
+# committed to a repo that started as this public template.
+#
+# If you want to version-control YOUR OWN vault, do it in a SEPARATE PRIVATE
+# repo — do not push your data back to the kit template. See SETUP.md.
+# ============================================================================
+
+# Raw layers (synced content — always private)
+projects/*
+slack/*
+linear/issues/*
+linear/projects/*
+linear/initiatives/*
+linear/docs/*
+notion/pages/*
+notion/databases/*
+
+# Watermarks and per-source state
+**/.last-sync
+**/.last-ingest
+notion/.allowlist
+notion/.user-id
+
+# Synthesized wiki (your synthesis of private data — private by default).
+# ALL of wiki/ is ignored except structure + READMEs. Your principles pages
+# can carry partner examples too, so they are private by default.
+wiki/*/*
+wiki/index.md
+wiki/log.md
+
+# ...but KEEP the structure, the READMEs, and the .gitkeep placeholders.
+# (The kit's SHIPPED templates live in templates/, which is always tracked.)
+!**/README.md
+!.gitkeep
+!**/.gitkeep
+
+# Local tooling / OS noise
+.DS_Store
+.obsidian/workspace*
+scratch/
+*.tmp

@@ -1,0 +1,104 @@
+# ============================================================================
+# Second Brain Kit — your configuration.
+#
+# Copy this file to `config.yaml` and fill it in. `CLAUDE.md` reads these
+# values wherever you see {{DOUBLE_BRACES}}. This is the ONLY file you should
+# need to edit to make the kit fit your function.
+#
+# The MECHANICS (sync/ingest/query/lint, watermarks, rolling windows, the
+# multi-agent orchestration) are identical for everyone. Only the SCOPE and
+# the TAXONOMY below are yours.
+# ============================================================================
+
+owner:
+  name: "Your Name"
+  # Your Slack member ID (Slack profile -> More -> Copy member ID). Used by
+  # `sync slack` to find your sent messages, and by the outbound-review gate.
+  slack_user_id: "U000XXXXX"
+  # Your self-DM channel ID, if you keep a working-notebook DM to yourself.
+  slack_self_dm_id: "D000XXXXX"
+  # Your Notion user UUID. Leave blank on first run; `sync notion` resolves and
+  # caches it to notion/.user-id.
+  notion_user_id: ""
+
+# --------------------------------------------------------------------------
+# SOURCE SCOPE — what the sync ops pull in. This is the biggest per-function
+# knob. A partnerships SA, an eng lead, and a BizOps analyst scope these very
+# differently.
+# --------------------------------------------------------------------------
+sources:
+  slack:
+    enabled: true
+    # Rolling re-fetch window in days (self-heals late thread replies).
+    rolling_window_days: 4
+  linear:
+    enabled: true
+    # Your Linear team key (e.g. "ENG", "GTM", "OPS"). The team whose work you
+    # want synthesized. Sync scopes to this team's active + recently-closed
+    # projects, plus anything assigned to you.
+    team_key: "TEAM"
+    rolling_window_days: 4
+  notion:
+    enabled: true
+    rolling_window_days: 4
+    # Databases you want watched (title + the signal they carry). Bootstrap on
+    # first run: the kit searches by name, you confirm, it persists to
+    # notion/.allowlist.
+    watched_databases: []
+      # - name: "Team meeting notes"
+      #   signal_type: "database"
+      # - name: "OKRs / planning"
+      #   signal_type: "database"
+
+# --------------------------------------------------------------------------
+# WIKI TAXONOMY — the entity types the synthesis layer organizes around.
+# The defaults below are tuned for a partnerships / solutions-architecture
+# function. SWAP THEM for what matters in yours. Examples:
+#   eng:     services, runbooks, postmortems, rfcs, dependencies, oncall
+#   biz-ops: accounts, processes, metrics, vendors, people, decisions
+#   pm:      features, personas, competitors, experiments, decisions, people
+# Every section becomes a folder under wiki/ and a group in wiki/index.md.
+# --------------------------------------------------------------------------
+wiki:
+  sections:
+    - partners      # external orgs you integrate/partner with
+    - systems       # internal systems/components you own or depend on
+    - integrators   # third-party connectivity/tooling vendors
+    - problems      # recurring problem archetypes
+    - people        # named individuals you engage
+    - incidents     # postmortems
+    - initiatives   # internal projects/efforts
+    - principles    # your work-style canon (ships with templates)
+    - concepts      # glossary of terms you re-explain
+    - workflows     # how-to recipes reconstructed from tribal knowledge
+    - customers     # end customers with substantive context
+
+  # Promotion thresholds — when a raw mention earns its own wiki page.
+  promotion:
+    default_min_sources: 3      # partners/problems: 3+ raw sources
+    person_external_min: 1      # external DRI with 1 substantive thread
+    concept_min_references: 3
+
+# --------------------------------------------------------------------------
+# TAG NAMESPACES — the controlled vocabulary for frontmatter tags. Keep it
+# small and locked; lint flags anything outside these.
+# --------------------------------------------------------------------------
+tags:
+  namespaces:
+    - "domain/"     # functional area
+    - "problem/"    # problem archetype
+    - "tech/"       # technology
+    # add your own, e.g. "partner/", "system/", "customer/", "team/"
+
+# --------------------------------------------------------------------------
+# OUTBOUND REVIEW GATE — the "acts like me on outbound comms" layer.
+# The kit ships a MECHANISM, not a personality. Declare your own rules here;
+# wiki/principles/ ships a worked example (someone else's voice) you delete or
+# overwrite. The core rule most people keep: never post directly — draft first.
+# --------------------------------------------------------------------------
+outbound_gate:
+  # Where drafts go for your review before anything is sent anywhere.
+  draft_destination: "self_dm"   # self_dm | file | stdout
+  never_direct_post: true
+  # Path to your voice/style rules (a principles page you author).
+  voice_rules: "wiki/principles/outbound-voice.md"
