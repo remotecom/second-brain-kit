@@ -17,6 +17,12 @@ cd my-vault
 
 You can call the folder anything. This is now *your* vault.
 
+> **Launch Claude Code from inside the vault** (`cd my-vault && claude`). The ops
+> write fetched Slack/Linear/Notion content to disk here; Claude Code's safety
+> classifier can block writes to folders *outside* the session's working
+> directory, so keep the vault as the working dir (or an explicitly allowed
+> path). If a daily-file write ever gets blocked, this is almost always why.
+
 ## 2. Stop Claude Code from deleting your memories (do this first)
 
 Claude Code defaults to a **30-day transcript retention**, and your project
@@ -127,6 +133,9 @@ answering things faster than you could find them.
 - **`ingest` walks 0 files** — the watermark (`wiki/.last-ingest`) may be ahead
   of your raw file dates, or a project symlink is dangling. See the ingest op in
   `CLAUDE.md`.
+- **A daily-file write got blocked** — you're likely running Claude Code from
+  outside the vault. `cd` into the vault and launch `claude` from there (see
+  step 1), or add the vault path to your allowed dirs.
 - **Memories vanished** — you skipped step 2. Set `cleanupPeriodDays`.
 - **Want to version your vault** — do it in a *separate private repo*. Don't
   push your data back to this template; that's what `.gitignore` protects.
