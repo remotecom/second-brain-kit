@@ -22,9 +22,26 @@ the method, not the data. Values in `{{DOUBLE_BRACES}}` come from `config.yaml`.
 - `notion/.last-sync` — ISO timestamp of the most recent Notion `last_edited_time`.
 - `notion/.allowlist` — JSON of watched databases (`{database_id, name, signal_type}`).
 - `notion/.user-id` — cached owner Notion user UUID.
+- `gdrive/files/*.md` — **RAW, immutable.** Forward-sync (`sync gdrive`), scoped
+  to files you own / last edited, plus a watched-folders allowlist. `fileId`
+  filenames.
+- `gdrive/.last-sync` — most recent Drive `modifiedTime`. `gdrive/.allowlist` —
+  watched folders.
+- `gmail/threads/*.md` — **RAW, immutable.** Forward-sync (`sync gmail`), one
+  file per *thread* (not per day — email threads span months and a daily file
+  would tear them in half).
+- `gmail/.last-sync` — most recent message `date`.
+- `gcal/*.md` — **RAW, immutable.** Forward-sync (`sync gcal`) daily notes.
+- `gcal/.last-sync` — most recent event `updated`.
+- `<source>/.state.json` — pre-fetch skip state (`id → freshness signal`), so an
+  unchanged item costs no body fetch.
 - `wiki/` — **LLM-MAINTAINED.** The only layer mutated by ingest.
 - `config.yaml` — your scope + taxonomy. `CLAUDE.md` reads it for every op.
-- `scripts/` — helper scripts (symlink refresh, linkrot lint).
+- `scripts/` — helper scripts. `raw-classes.sh` is the **single source of truth**
+  for what counts as a raw layer; `linkrot-lint.sh` and `delta-walk.sh` both
+  source it. Add a new source there and nowhere else.
+- `tests/run.sh` — the test suite. Run it after touching anything in `scripts/`
+  or `.gitignore`.
 
 ## Wiki structure
 
@@ -104,6 +121,55 @@ each agent does more, not that you spawn more. Guideline shape:
   gates and commits.
 
 Single-context runs are fine too; the ops below are written to run either way.
+
+### Sync contract (every source)
+
+Each `sync <source>` op below states only its **deltas** from this contract.
+
+```
+ 0. START=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+ 1. threshold = MIN(window_start, watermark)
+    └─ no <source>/.last-sync? ⇒ FIRST-ENCOUNTER BOOTSTRAP over
+       sources.<name>.bootstrap_horizon_days, then rolling window forever after
+ 2. discovery call — cheap metadata only, no bodies
+ 3. PRE-FETCH SKIP — compare each id's freshness signal against
+    <source>/.state.json; unchanged ⇒ skip the body fetch entirely
+ 4. detail fetch for survivors only
+ 5. apply the SENSITIVITY DENYLIST, then content-hash → WRITTEN | SKIPPED
+ 6. VERIFICATION GATE — every WRITTEN file has mtime > $START. If any didn't
+    update, do NOT advance the watermark; report the gap and redo.
+ 7. advance the watermark (forward only)
+ 8. report: intended / written / skipped / excluded / truncated
+```
+
+The content-hash in step 5 saves the *write*. Step 3 is what saves the *fetch* —
+without it a rolling window re-downloads every body every run to discover that
+nothing changed.
+
+**Documented exceptions** (stated here so they aren't discovered as bugs):
+- **Slack** has no content-hash skip — the daily-file overwrite *is* its
+  self-healing mechanism. Don't add a hash gate.
+- **Gmail** must re-apply the threshold client-side; its `after:` operator is
+  date-granular (`YYYY/MM/DD`) and cannot express a timestamp.
+- **Calendar** has no separate body fetch, so step 3 is a no-op there.
+
+### Sensitivity denylist (Google sources)
+
+`.gitignore` closes exactly one exposure path — the repo. Two remain: raw files
+are plaintext that **every Claude session in this vault reads**, and `ingest`
+**synthesizes them into wiki pages**. Gmail, Calendar and Drive are personal
+accounts that also hold comp, HR, recruiting, medical and private-event content.
+
+Exclusions are declared in `config.yaml` and applied **at fetch time**, so
+excluded content never reaches disk:
+
+- **Gmail** — `exclude_labels`, `exclude_categories`
+- **Calendar** — skip events with `visibility: private`
+- **Drive** — `exclude_folders`
+
+Config-declared, never model judgment, so it is auditable and cannot drift
+between runs. **Count exclusions in the sync report** — a silent exclusion is
+indistinguishable from a missing sync.
 
 ### Sync (Slack)
 
@@ -220,32 +286,44 @@ the watermark write and the log header — don't type a guessed timestamp.
    watermark:
 
    ```bash
-   find -L projects slack linear notion -type f -name "*.md" \
-     -newermt "$(sed 's/Z$//; s/T/ /' wiki/.last-ingest)"
+   bash scripts/delta-walk.sh          # prints the `Deltas walked:` line
+   bash scripts/delta-walk.sh --list   # also lists the delta file paths
    ```
 
-   Both `sed` substitutions are required on BSD `find` (macOS):
-   - `s/Z$//` strips the trailing `Z` — BSD `find` silently rejects the `Z` and
-     returns **zero** matches with no error.
-   - `s/T/ /` replaces the `T` separator with a space — with the `T` form BSD
-     `find` mis-parses and **under-filters wrong**, pulling in already-ingested
-     files (looks like legit work, silently re-folds stale content). This is the
-     more dangerous failure — it returns *too many*, not zero.
+   **Use the script — do not hand-roll the `find`.** The class list comes from
+   `scripts/raw-classes.sh`, so a class can be reported as `0` but can never go
+   *missing* from the line. Hand-typing 11 field names every run gave the
+   detector the same failure mode as the thing it detects.
+
+   **The cutoff trap (measured on macOS 15.6.1, pinned in `tests/run.sh`).**
+   The watermark is written as `2026-08-14T00:00:00Z`, and BSD `find` **cannot
+   parse that string** — it exits 1 with `find: Can't parse date/time`. Called
+   the way ingest calls it (`2>/dev/null | wc -l`) the error vanishes and you
+   get a silent **zero**. `s/Z$//` is therefore mandatory.
+
+   > Earlier revisions of this file also claimed the `T` separator makes BSD
+   > `find` *under-filter* and return **too many** files, calling it "the more
+   > dangerous failure." **That does not reproduce on macOS 15.6.1** — with `Z`
+   > stripped, the `T` form and the space form match identically. `delta-walk.sh`
+   > still applies `s/T/ /` as cheap defence for other BSD variants, but do not
+   > trust the old warning; `tests/run.sh` pins the real behaviour.
 
    **Sanity-check the delta:** if a class shows far more files than sync wrote,
-   the cutoff is mis-parsing — re-derive it.
+   re-derive the cutoff.
 3. **For each new raw file:** read it; **skip if `wiki_ingest: false`**;
    determine which wiki pages it touches (tag overlap + content); update those
    pages (append content under new sub-headings, add the raw path to `sources:`,
    bump `updated:`); **create new pages per the promotion thresholds**.
-   **Source-balance (soft):** every new page should ideally cite ≥2 source
-   classes; if only one is possible, write it anyway and flag `[source-balance]`
-   in the log.
+   **Source-balance (soft):** every new page should cite ≥2 source classes
+   **including at least one human-authored class** (`slack`, `gmail`,
+   `projects`). At 4 classes "≥2" was a real bar; at 7 it is trivially met, and
+   a page built only from Drive metadata and calendar invites is not synthesis.
+   If only one class is possible, write it anyway and flag `[source-balance]`.
 4. **Append one entry to `wiki/log.md`:**
 
    ```
    ## [YYYY-MM-DD HH:MM] ingest | <one-line summary>
-   Deltas walked: projects/=N, slack/=N, linear/issues=N, linear/projects=N, linear/initiatives=N, linear/docs=N, notion/pages=N, notion/databases=N
+   Deltas walked: projects/=N, slack/=N, linear/issues=N, linear/projects=N, linear/initiatives=N, linear/docs=N, notion/pages=N, notion/databases=N, gdrive/files=N, gmail/threads=N, gcal/=N
    Sources touched:
    - <raw file>
    Wiki pages updated:
@@ -268,8 +346,9 @@ When you ask a question:
 
 1. Read `wiki/index.md` to orient.
 2. Read the most relevant wiki page(s).
-3. Drill into raw (`projects/`, `slack/`, `linear/`, `notion/`) only if the wiki
-   has a gap or you need specifics it doesn't cover.
+3. Drill into raw (`projects/`, `slack/`, `linear/`, `notion/`, `gdrive/`,
+   `gmail/`, `gcal/`) only if the wiki has a gap or you need specifics it
+   doesn't cover.
 4. If the answer is a useful new synthesis (a cross-entity comparison, a pattern
    across problems), offer to file it as a new wiki page.
 
@@ -290,11 +369,20 @@ When you say **"lint"**, report (don't auto-fix without approval):
    dangling `projects/*` symlinks. Mechanical half: `bash scripts/linkrot-lint.sh`.
 10. **Unlinked live project memories** — a memory dir with no `projects/*`
     symlink (⇒ never ingested). Fix: `bash scripts/refresh-project-symlinks.sh`.
+11. **Ghost raw files** — a raw file whose upstream item was deleted. These
+    connectors expose no deletion feed, so deletions are **probe-detected**:
+    `get_file_metadata` / `get_thread` 404 once the item is gone. Probe
+    occasionally; do **not** infer deletion from file age — old and deleted are
+    different things, and an age heuristic fires on almost everything.
+12. **Tests green** — `bash tests/run.sh`. Run after any change to `scripts/` or
+    `.gitignore`.
 
 ## Rules
 
-- **NEVER edit files under `projects/`, `slack/`, `linear/`, or `notion/`.** Only
-  `wiki/` is mutable. Raw is raw.
+- **NEVER edit files under `projects/`, `slack/`, `linear/`, `notion/`,
+  `gdrive/`, `gmail/`, or `gcal/`.** Only `wiki/` is mutable. Raw is raw.
+  This includes *annotating* raw — do not stamp `wiki_ingest: false` onto a raw
+  file to steer synthesis. Filtering is ingest's job; raw records what happened.
 - **Preserve existing `sources:` entries** on updates; append, don't replace.
 - **Wiki frontmatter uses `type: wiki`** — never a memory type.
 - **Use the locked tag vocabulary.** Don't invent namespaces.

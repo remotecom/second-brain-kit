@@ -50,6 +50,63 @@ sources:
       # - name: "OKRs / planning"
       #   signal_type: "database"
 
+  # ---- Google Workspace -----------------------------------------------------
+  # These default to `enabled: false` (unlike the three above). Two reasons:
+  #   1. Gmail and Calendar need `/mcp` auth before their tools exist at all.
+  #   2. Many Workspace tenants block third-party Drive/Gmail OAuth scopes at
+  #      the admin level, so a teammate may simply not be able to connect.
+  # A disabled source is skipped cleanly instead of failing the whole sync.
+  #
+  # `bootstrap_horizon_days` only applies on a source's FIRST run (no
+  # .last-sync yet). It back-fills history once, then the rolling window takes
+  # over. Without it a new source on an existing vault would only ever see the
+  # last few days and your history would be invisible forever.
+  #
+  # The `exclude_*` keys are the SENSITIVITY DENYLIST. These are personal
+  # accounts: they hold comp, HR, recruiting, medical and private-event
+  # content. Gitignore keeps that out of git; it does NOT keep it out of the
+  # plaintext files every vault session reads, or out of synthesized wiki
+  # pages. Exclusions are applied at fetch time so the content never lands.
+  gdrive:
+    enabled: false
+    rolling_window_days: 4
+    bootstrap_horizon_days: 365
+    # Folders to sync in full (bootstrapped to gdrive/.allowlist on first run).
+    # NOTE: single-level — the Drive API's parentId does NOT recurse into
+    # subfolders. List subfolders explicitly if you need them.
+    watched_folders: []
+    exclude_folders: []
+    # Only types `read_file_content` can actually read. `text/*` is NOT
+    # supported by the connector and would fail; images are supported but
+    # produce useless raw, so they are deliberately absent.
+    mime_allowlist:
+      - "application/vnd.google-apps.document"
+      - "application/vnd.google-apps.presentation"
+      - "application/vnd.google-apps.spreadsheet"
+      - "application/pdf"
+      - "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      - "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    max_body_chars: 50000
+
+  gmail:
+    enabled: false
+    rolling_window_days: 4
+    bootstrap_horizon_days: 365
+    # Hard ceiling per run. On truncation the watermark must NOT jump past the
+    # threads that were dropped — see the Gmail op in CLAUDE.md.
+    max_threads_per_sync: 150
+    exclude_labels: []
+    exclude_categories: ["promotions", "social", "forums"]
+    strip_quoted_replies: true      # else a 20-message thread stores itself 20x
+    include_attachments: false
+
+  gcal:
+    enabled: false
+    rolling_window_days: 4
+    bootstrap_horizon_days: 365
+    include_private: false          # skip events with visibility: private
+    include_declined: false
+
 # --------------------------------------------------------------------------
 # WIKI TAXONOMY — the entity types the synthesis layer organizes around.
 # The defaults below are tuned for a partnerships / solutions-architecture
@@ -76,7 +133,10 @@ wiki:
   # Promotion thresholds — when a raw mention earns its own wiki page.
   promotion:
     default_min_sources: 3      # partners/problems: 3+ raw sources
-    person_external_min: 1      # external DRI with 1 substantive thread
+    # Raised from 1 to 2 when Gmail landed. At 1, every vendor, recruiter and
+    # one-off contact who ever emailed you earns a wiki page and people/ floods.
+    # Set back to 1 only if you do NOT enable gmail.
+    person_external_min: 2
     concept_min_references: 3
 
 # --------------------------------------------------------------------------

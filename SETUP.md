@@ -44,14 +44,35 @@ important step; skipping it silently loses your raw memory layer.
 In Claude Code, run `/mcp` and connect the connectors for the sources you
 enabled. The ops call these tool families:
 
-| Source | What you need |
-|---|---|
-| Slack  | a Slack MCP with search + thread-read + send-message |
-| Linear | a Linear MCP with list/get issues, projects, initiatives, docs, comments |
-| Notion | a Notion MCP with search, fetch, comments, data-source query |
+| Source | What you need | Default |
+|---|---|---|
+| Slack  | a Slack MCP with search + thread-read + send-message | `enabled: true` |
+| Linear | a Linear MCP with list/get issues, projects, initiatives, docs, comments | `enabled: true` |
+| Notion | a Notion MCP with search, fetch, comments, data-source query | `enabled: true` |
+| Google Drive | Drive MCP with `search_files`, `list_recent_files`, `read_file_content` | `enabled: false` |
+| Gmail | Gmail MCP with `search_threads`, `get_thread` | `enabled: false` |
+| Google Calendar | Calendar MCP with `list_calendars`, `list_events`, `get_event` | `enabled: false` |
 
 If a connector isn't available for a source, set `enabled: false` for it in
 `config.yaml` and the ops will skip it.
+
+**The Google sources ship disabled on purpose.** Gmail and Calendar expose only
+`authenticate` / `complete_authentication` until you connect them in `/mcp` —
+the real tools do not exist before that. And plenty of Workspace tenants block
+third-party Drive/Gmail OAuth scopes at the admin level, so you may not be able
+to enable them at all. Flip `enabled: true` only once `/mcp` shows the connector
+working.
+
+**First run of a Google source is slow.** With no `.last-sync` yet, the source
+back-fills `bootstrap_horizon_days` of history once (default 365) before
+settling into the rolling window. That is expected, not a hang.
+
+**Read the sensitivity denylist before enabling Gmail.** These are personal
+accounts. `config.yaml`'s `exclude_labels` / `exclude_categories` /
+`exclude_folders` / `include_private` are applied at fetch time so excluded
+content never lands on disk. `.gitignore` only keeps things out of git — it does
+not keep them out of the plaintext files every vault session reads, or out of
+synthesized wiki pages.
 
 ## 4. Fill in your config
 
@@ -124,12 +145,18 @@ answering things faster than you could find them.
   across multiple Claude Code projects (it re-links memory dirs; a dangling
   symlink is skipped silently).
 - `lint` occasionally to catch orphans, stale pages, dead links, and taxonomy
-  drift. `bash scripts/linkrot-lint.sh` is the mechanical half.
+  drift. `bash scripts/linkrot-lint.sh` is the mechanical half — it should exit
+  `0` and print **six** sections. Anything less means it aborted early.
+- `bash tests/run.sh` after changing anything in `scripts/` or `.gitignore`.
+  It pins the watermark-cutoff behaviour and the both-directions leak test.
 
 ## Troubleshooting
 
-- **`sync` finds nothing** — check the MCP is connected (`/mcp`) and your
-  `config.yaml` IDs/team are right.
+- **`sync` finds nothing** — check the MCP is connected (`/mcp`), that the
+  source is `enabled: true`, and that your `config.yaml` IDs/team are right.
+- **`lint` prints a short, clean-looking report** — count the sections. A report
+  that stops before `## 2.` has aborted, not passed. `bash tests/run.sh` checks
+  this specifically.
 - **`ingest` walks 0 files** — the watermark (`wiki/.last-ingest`) may be ahead
   of your raw file dates, or a project symlink is dangling. See the ingest op in
   `CLAUDE.md`.

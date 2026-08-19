@@ -18,16 +18,39 @@ linear/initiatives/*
 linear/docs/*
 notion/pages/*
 notion/databases/*
+gdrive/files/*
+gmail/threads/*
+gcal/*
 
 # Your filled-in config (holds your Slack/Notion IDs, team key) — private.
 # Only config.example.yaml is tracked; your config.yaml never commits.
 config.yaml
 
-# Watermarks and per-source state
-**/.last-sync
-**/.last-ingest
+# Watermarks and per-source state.
+# ANCHORED to the real source dirs on purpose. These were `**/.last-sync` /
+# `**/.last-ingest`, which match at ANY depth and would silently swallow the
+# test fixture vault's watermarks under tests/ — making the fixture
+# uncommittable and the tests unreproducible.
+/slack/.last-sync
+/linear/.last-sync
+/notion/.last-sync
+/gdrive/.last-sync
+/gmail/.last-sync
+/gcal/.last-sync
+/wiki/.last-ingest
+
+# Per-source allowlists, caches, and pre-fetch skip state. Each needs its OWN
+# line — these are not covered by the raw-layer globs above. Commit d4eba8f
+# fixed exactly this class of leak once already (config.yaml).
 notion/.allowlist
 notion/.user-id
+gdrive/.allowlist
+/slack/.state.json
+/linear/.state.json
+/notion/.state.json
+/gdrive/.state.json
+/gmail/.state.json
+/gcal/.state.json
 
 # Synthesized wiki (your synthesis of private data — private by default).
 # ALL of wiki/ is ignored except structure + READMEs. Your principles pages
