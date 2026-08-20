@@ -75,7 +75,13 @@ sources:
     # NOTE: single-level — the Drive API's parentId does NOT recurse into
     # subfolders. List subfolders explicitly if you need them.
     watched_folders: []
-    exclude_folders: []
+    # Excluded by folder title or ID. "Meet Recordings" is the default because
+    # it holds video recordings, chat logs, and auto-generated "Notes by Gemini"
+    # docs that are usually pure boilerplate ("A summary wasn't produced for this
+    # meeting"). Excluding a FOLDER is auditable; judging each doc's emptiness
+    # would be the editorial discretion the Rules forbid.
+    exclude_folders:
+      - "Meet Recordings"
     # Only types `read_file_content` can actually read. `text/*` is NOT
     # supported by the connector and would fail; images are supported but
     # produce useless raw, so they are deliberately absent.

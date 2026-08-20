@@ -357,6 +357,78 @@ results only (no modification-time filter); `orderBy: 'lastModified'` sorts
 than being reported, which the in-window overwrite handles but out-of-window
 cancellations do not (lint check 11).
 
+### Sync (Google Drive)
+
+When you say **"sync gdrive"** (or "sync drive"):
+
+1. **Range.** Files with `modifiedTime` newer than
+   `MIN(window_start, watermark)`, where window = last **`{{GDRIVE_WINDOW}}`**
+   days. Unlike Slack/Calendar, Drive *can* filter on modification time, so this
+   source is genuinely incremental.
+
+2. **Bootstrap.** No `gdrive/.last-sync` ⇒ walk `bootstrap_horizon_days` once.
+
+3. **Watermark.** `gdrive/.last-sync` = MAX `modifiedTime` seen. Forward only.
+
+4. **Discovery — union, deduped by `id`:**
+   - `search_files("owner = 'me' and modifiedTime > <T>")`, paginate `pageToken`.
+   - `list_recent_files(orderBy: 'lastModifiedByMe')` — **has no time filter**
+     (only `pageSize`/`pageToken`), so page until results fall older than `T`,
+     under a hard page ceiling. `lastModifiedByMe` is *not* a searchable field;
+     this sort order is the only way to reach that signal.
+   - Watched folders: `search_files("parentId = '<id>' and modifiedTime > <T>")`.
+     **`parentId` does not recurse** — a watched folder does not include its
+     subfolders. Enumerate subfolders explicitly if you need them.
+
+5. **Filter, in this order, counting each rejection:**
+   - **`exclude_folders`** (by `parentId`). Default excludes **"Meet Recordings"**.
+     That folder holds Meet artifacts: `video/mp4` recordings, `text/plain` chat
+     logs, and auto-generated "Notes by Gemini" docs. The Gemini docs are the
+     reason this exclusion exists — they are frequently pure boilerplate
+     ("A summary wasn't produced for this meeting", "No suggested next steps were
+     found") and would fill the wiki with empty pages. Excluding by folder is
+     declarative and auditable; judging emptiness per document is not allowed.
+   - **`mime_allowlist`.** Only types `read_file_content` can actually read:
+     Google Docs/Slides/Sheets, MS Office, ODF, PDF. **`text/*` is NOT supported**
+     by the connector and would fail. Images (png/jpeg) *are* supported but yield
+     useless raw, so they are deliberately absent from the default allowlist.
+
+6. **Pre-fetch skip.** Compare each `id`'s `modifiedTime` against
+   `gdrive/.state.json`; unchanged ⇒ skip the body fetch entirely.
+
+7. **Fetch** `read_file_content(fileId, includeComments: true)`.
+   **Comments are expanded, like every other source** — they inline into the text
+   with thread mapping. Supported for Docs, Slides and Sheets only; note the gap
+   for PDFs and Office files rather than implying coverage.
+
+8. **Write** `gdrive/files/<fileId>.md` with content-hash skip. Frontmatter:
+   `id`, `title`, `mime_type`, `owner`, `parent_id`, `web_link`, `created_time`,
+   `modified_time`, `in_scope_reasons`, `truncated`. Bodies over
+   `max_body_chars` truncate with an explicit marker and `truncated: true` — a
+   declared cap, never per-document judgment.
+
+9. **Cross-link — only what the source itself contains.** A Drive doc reached
+   from a calendar attachment is linked as `[[gdrive/files/<id>]]` from `gcal/`
+   because the attachment *is* in the source event. Meeting-notes docs embed
+   their own calendar event URL, so record that URL as it appears.
+
+   Do **not** add a `See also:` backlink from the Drive file to `[[gcal/…]]`.
+   That link is not in the document — inventing it is synthesis written into the
+   immutable layer, the same violation as stamping `wiki_ingest: false` onto raw.
+   Rendering a link the source *does* contain is representation; adding one it
+   does not is editorializing. Cross-references the source lacks belong in
+   `wiki/`.
+
+10. **Verification gate** (every `WRITTEN` file has mtime > `$START`), then
+    watermark, then **report**: found / excluded-by-folder / excluded-by-mime /
+    pre-fetch-skipped / written / hash-skipped.
+
+**Google Drive MCP caveats:** `search_files` supports only `title`, `fullText`,
+`mimeType`, `modifiedTime`, `viewedByMeTime`, `createdTime`, `parentId`, `owner`,
+`sharedWithMe` — there is no `lastModifiedByMe` term and no recursion on
+`parentId`. `fileSize` on a Google-native doc is not its text length. There is no
+change feed, so deletions are invisible until probed (lint check 11).
+
 ### Ingest
 
 When you say **"ingest":**
