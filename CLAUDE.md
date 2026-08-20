@@ -266,6 +266,97 @@ When you say **"sync notion"**:
 search is best-effort (fall back to your display name); some data-source queries
 need `data_source_id`, not `database_id` (resolve + cache in the allowlist).
 
+### Sync (Google Calendar)
+
+When you say **"sync gcal"** (or "sync calendar"):
+
+1. **Range.** The last **`{{GCAL_WINDOW}}`** days of **event** time (today +
+   prior), **always, regardless of watermark** — the same rolling-window rule as
+   Slack. Accept overrides (`sync gcal since YYYY-MM-DD`, `last 14 days`).
+
+   **Why not incremental:** `list_events` filters on `startTime`/`endTime`, which
+   are the *event's* time, not its modification time, and this connector exposes
+   no `updatedMin`. Asking "what changed since last sync" is therefore impossible.
+   That is fine — it is the same trade Slack already makes. Re-fetching the window
+   wholesale and overwriting **is** the self-healing mechanism. Do not try to
+   invent an incremental path here.
+
+   **Accepted limitation, state it in the report:** an event edited or cancelled
+   *outside* the window is not picked up. Slack has carried the identical
+   limitation since day one.
+
+2. **Bootstrap.** No `gcal/.last-sync` ⇒ first-encounter bootstrap: walk
+   `bootstrap_horizon_days` of event time once, then the rolling window forever
+   after.
+
+3. **Watermark.** `gcal/.last-sync` holds MAX event `updated` seen. **Advisory
+   only** — the window does the work, exactly as with Slack. Advances forward only.
+
+4. **Calendars — explicit allowlist, never "everything readable."**
+   Sync **only** the calendar IDs in `sources.gcal.calendars`. Default is the
+   owner's work calendar alone.
+
+   This is not a preference, it is a scope boundary. `list_calendars` on a real
+   account returns the owner's **personal** Gmail calendar, **colleagues'**
+   calendars they have shared, and org-wide PTO/holiday calendars. Syncing what
+   you *can* read would pull the owner's personal life and a coworker's full
+   schedule into a work vault, and then into synthesized wiki pages.
+
+   Use `list_calendars` only to *resolve* names to IDs during setup, never to
+   enumerate what to sync. Report any readable calendar not on the allowlist as
+   "available, not synced" so the omission is visible rather than silent.
+
+5. **Fetch.** `list_events(calendarId, startTime, endTime, eventType: ['DEFAULT'],
+   orderBy: 'startTime')`, paginating on `pageToken`.
+   **`eventType: ['DEFAULT']` is mandatory** — the connector's default *also*
+   returns `FOCUS_TIME`, `OUT_OF_OFFICE` and `FROM_GMAIL`, which fills the vault
+   with focus blocks and auto-generated stubs.
+
+6. **Sensitivity denylist.** Skip events with `visibility: private` unless
+   `sources.gcal.include_private` is true. Skip declined events unless
+   `include_declined`. **Count every exclusion and report the count** — a silent
+   exclusion is indistinguishable from a failed sync.
+
+7. **No pre-fetch skip (step 3 of the contract is a no-op here).** `list_events`
+   already returns full event bodies; there is no separate detail fetch to avoid.
+   Call `get_event` only when an event is truncated in the list response.
+
+8. **Write per-day files** `gcal/YYYY-MM-DD.md`, **overwriting** every in-window
+   file. **No content-hash skip** — same rationale as Slack: the overwrite is what
+   self-heals reschedules and cancellations. Per event record: time + duration,
+   title, organizer, attendees (`displayName` where present, else `email`, each
+   with `responseStatus`), location/Meet link, description, and calendar name.
+   Resolve Drive links in `attachments[].fileUrl` to `[[gdrive/files/<fileId>]]`
+   so a meeting is linked to the document it produced.
+
+   **Descriptions:** record verbatim up to `max_description_chars`. Past the cap,
+   truncate and append `[truncated at N chars — full text in the source event]`
+   plus `truncated: true` in frontmatter. This is a *declared* cap, not
+   discretion: the Rules forbid editorial condensing, so a sync agent may never
+   decide per-event that some prose is boilerplate — it may only apply the cap.
+
+9. **Recurring events.** `list_events` expands a series into one instance per
+   occurrence. **Record every instance verbatim.** Do **not** judge which repeats
+   are "low-information" and do **not** stamp `wiki_ingest: false` onto a raw
+   file — that is editorial compression by a sync agent, which the Rules forbid.
+   Collapsing repetitive instances is `ingest`'s job, on a mechanical rule
+   (identical title with no attendee or description delta vs. the prior instance).
+
+10. **Verification gate (before advancing the watermark).** Every in-window daily
+    file must have mtime newer than `$START`. If any didn't update, **do not
+    advance the watermark** — report the gap and redo.
+
+11. **Report:** events written, per-day file count, calendars covered, exclusions
+    by reason (private / declined / non-DEFAULT type), range, watermark, and the
+    out-of-window-edit caveat. Offer to `ingest`.
+
+**Google Calendar MCP caveats:** `list_events` returns event-time-filtered
+results only (no modification-time filter); `orderBy: 'lastModified'` sorts
+*within* that filtered set and does not widen it. `pageSize` defaults to 100, max
+250. There is no deletion feed — a cancelled event vanishes from results rather
+than being reported, which the in-window overwrite handles but out-of-window
+cancellations do not (lint check 11).
+
 ### Ingest
 
 When you say **"ingest":**

@@ -104,8 +104,21 @@ sources:
     enabled: false
     rolling_window_days: 4
     bootstrap_horizon_days: 365
+    # EXPLICIT ALLOWLIST. Only these calendar IDs are synced.
+    # `list_calendars` on a real account also returns your PERSONAL calendar,
+    # colleagues' calendars shared with you, and org PTO/holiday calendars.
+    # Syncing everything readable would pull your personal life and a
+    # coworker's schedule into the vault. List only what you want synthesized.
+    calendars:
+      - "you@yourcompany.com"       # your work calendar
     include_private: false          # skip events with visibility: private
-    include_declined: false
+    include_declined: false         # skip events you declined
+    # Descriptions over this length are truncated with an explicit marker and
+    # `truncated: true`. Corporate invites carry kilobytes of dial-in and legal
+    # boilerplate. This is a DECLARED cap, not sync-agent judgment — the Rules
+    # forbid editorial condensing, so the trim has to be a config rule you can
+    # audit, not a decision the model makes per event.
+    max_description_chars: 2000
 
 # --------------------------------------------------------------------------
 # WIKI TAXONOMY — the entity types the synthesis layer organizes around.

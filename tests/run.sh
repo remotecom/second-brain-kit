@@ -108,19 +108,27 @@ cleanup_all() { rm -rf "$TD"; cleanup_probes; rm -f "$VAULT_ROOT/$PROBE_GCAL"; }
 trap cleanup_all EXIT
 printf -- '# probe\n' > "$PROBE_GCAL"; touch -t 202608180000 "$PROBE_GCAL"
 
-dw2=$(bash scripts/delta-walk.sh "2020-01-01T00:00:00Z" 2>/dev/null)
-has "delta-walk handles a Z-suffixed watermark (does not silently zero)" "$dw2" "Deltas walked:"
-n_gcal=$(printf '%s' "$dw2" | tr ',' '\n' | grep 'gcal/=' | tr -dc '0-9')
-is "delta-walk sees a raw file newer than a 2020 watermark" "1" "${n_gcal:-0}"
+# Assert on the DELTA this probe causes, never on an absolute count — a real
+# vault has real content and absolute counts make the suite depend on it.
+count_gcal() { bash scripts/delta-walk.sh "$1" 2>/dev/null | tr ',' '\n' | grep 'gcal/=' | tr -dc '0-9'; }
 
-# ...and must NOT see it when the watermark is newer than the file.
-dw3=$(bash scripts/delta-walk.sh "2026-08-19T00:00:00Z" 2>/dev/null)
-n_gcal3=$(printf '%s' "$dw3" | tr ',' '\n' | grep 'gcal/=' | tr -dc '0-9')
-is "delta-walk excludes a raw file older than the watermark" "0" "${n_gcal3:-0}"
+rm -f "$PROBE_GCAL"
+before_old=$(count_gcal "2020-01-01T00:00:00Z")   # watermark older than probe
+before_new=$(count_gcal "2026-08-19T00:00:00Z")   # watermark newer than probe
+printf -- '# probe\n' > "$PROBE_GCAL"; touch -t 202608180000 "$PROBE_GCAL"
+after_old=$(count_gcal "2020-01-01T00:00:00Z")
+after_new=$(count_gcal "2026-08-19T00:00:00Z")
 
-# README.md is kit docs, never a delta.
+has "delta-walk handles a Z-suffixed watermark (does not silently zero)" \
+    "$(bash scripts/delta-walk.sh "2020-01-01T00:00:00Z" 2>/dev/null)" "Deltas walked:"
+is  "delta-walk COUNTS a raw file newer than the watermark (+1)" \
+    "$(( before_old + 1 ))" "$after_old"
+is  "delta-walk EXCLUDES a raw file older than the watermark (+0)" \
+    "$before_new" "$after_new"
+
+# README.md is kit docs, never a delta. slack/ holds only README.md.
 is "delta-walk does not count README.md as raw content" "0" \
-   "$(printf '%s' "$dw2" | tr ',' '\n' | grep 'slack/=' | tr -dc '0-9')"
+   "$(bash scripts/delta-walk.sh "2020-01-01T00:00:00Z" 2>/dev/null | tr ',' '\n' | grep 'slack/=' | tr -dc '0-9')"
 rm -f "$PROBE_GCAL"
 
 # ===========================================================================
