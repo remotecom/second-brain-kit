@@ -50,6 +50,94 @@ sources:
       # - name: "OKRs / planning"
       #   signal_type: "database"
 
+  # ---- Google Workspace -----------------------------------------------------
+  # These default to `enabled: false` (unlike the three above). Two reasons:
+  #   1. Gmail and Calendar need `/mcp` auth before their tools exist at all.
+  #   2. Many Workspace tenants block third-party Drive/Gmail OAuth scopes at
+  #      the admin level, so a teammate may simply not be able to connect.
+  # A disabled source is skipped cleanly instead of failing the whole sync.
+  #
+  # `bootstrap_horizon_days` only applies on a source's FIRST run (no
+  # .last-sync yet). It back-fills history once, then the rolling window takes
+  # over. Without it a new source on an existing vault would only ever see the
+  # last few days and your history would be invisible forever.
+  #
+  # The `exclude_*` keys are the SENSITIVITY DENYLIST. These are personal
+  # accounts: they hold comp, HR, recruiting, medical and private-event
+  # content. Gitignore keeps that out of git; it does NOT keep it out of the
+  # plaintext files every vault session reads, or out of synthesized wiki
+  # pages. Exclusions are applied at fetch time so the content never lands.
+  gdrive:
+    enabled: false
+    rolling_window_days: 4
+    bootstrap_horizon_days: 365
+    # Folders to sync in full (bootstrapped to gdrive/.allowlist on first run).
+    # NOTE: single-level — the Drive API's parentId does NOT recurse into
+    # subfolders. List subfolders explicitly if you need them.
+    watched_folders: []
+    # Excluded by folder title or ID. "Meet Recordings" is the default because
+    # it holds video recordings, chat logs, and auto-generated "Notes by Gemini"
+    # docs that are usually pure boilerplate ("A summary wasn't produced for this
+    # meeting"). Excluding a FOLDER is auditable; judging each doc's emptiness
+    # would be the editorial discretion the Rules forbid.
+    exclude_folders:
+      - "Meet Recordings"
+    # Only types `read_file_content` can actually read. `text/*` is NOT
+    # supported by the connector and would fail; images are supported but
+    # produce useless raw, so they are deliberately absent.
+    mime_allowlist:
+      - "application/vnd.google-apps.document"
+      - "application/vnd.google-apps.presentation"
+      - "application/vnd.google-apps.spreadsheet"
+      - "application/pdf"
+      - "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      - "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    max_body_chars: 50000
+
+  gmail:
+    # SPECIFIED BUT DISABLED. The connector holds no mail scopes ("Insufficient
+    # scope" from list_labels). Re-auth in /mcp first, then see the enabling
+    # checklist in CLAUDE.md — enabling requires THREE edits in one change, one
+    # of which is wiki.promotion.person_external_min below.
+    enabled: false
+    rolling_window_days: 4
+    bootstrap_horizon_days: 365
+    # Self-imposed cost ceiling per run, NOT a connector limit (search_threads
+    # paginates via pageToken). On truncation the op halves the window and
+    # re-runs each half until every sub-window fits — it must never clamp the
+    # watermark, because search_threads guarantees no ordering and the dropped
+    # threads may be newer than any clamp. See the Gmail op in CLAUDE.md.
+    max_threads_per_sync: 150
+    # Thread bodies over this length truncate with an explicit marker and
+    # `truncated: true`. A declared cap, never per-thread judgment.
+    max_body_chars: 12000
+    # NOTE: exclude_labels takes label IDs, not display names. Resolve them with
+    # list_labels once the connector is authorized.
+    exclude_labels: []
+    exclude_categories: ["promotions", "social", "forums"]
+    strip_quoted_replies: true      # else a 20-message thread stores itself 20x
+    include_attachments: false
+
+  gcal:
+    enabled: false
+    rolling_window_days: 4
+    bootstrap_horizon_days: 365
+    # EXPLICIT ALLOWLIST. Only these calendar IDs are synced.
+    # `list_calendars` on a real account also returns your PERSONAL calendar,
+    # colleagues' calendars shared with you, and org PTO/holiday calendars.
+    # Syncing everything readable would pull your personal life and a
+    # coworker's schedule into the vault. List only what you want synthesized.
+    calendars:
+      - "you@yourcompany.com"       # your work calendar
+    include_private: false          # skip events with visibility: private
+    include_declined: false         # skip events you declined
+    # Descriptions over this length are truncated with an explicit marker and
+    # `truncated: true`. Corporate invites carry kilobytes of dial-in and legal
+    # boilerplate. This is a DECLARED cap, not sync-agent judgment — the Rules
+    # forbid editorial condensing, so the trim has to be a config rule you can
+    # audit, not a decision the model makes per event.
+    max_description_chars: 2000
+
 # --------------------------------------------------------------------------
 # WIKI TAXONOMY — the entity types the synthesis layer organizes around.
 # The defaults below are tuned for a partnerships / solutions-architecture
@@ -76,7 +164,10 @@ wiki:
   # Promotion thresholds — when a raw mention earns its own wiki page.
   promotion:
     default_min_sources: 3      # partners/problems: 3+ raw sources
-    person_external_min: 1      # external DRI with 1 substantive thread
+    # Raised from 1 to 2 when Gmail landed. At 1, every vendor, recruiter and
+    # one-off contact who ever emailed you earns a wiki page and people/ floods.
+    # Set back to 1 only if you do NOT enable gmail.
+    person_external_min: 2
     concept_min_references: 3
 
 # --------------------------------------------------------------------------

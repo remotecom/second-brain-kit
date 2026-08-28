@@ -4,7 +4,8 @@
 
 - [Claude Code](https://claude.com/claude-code) installed and working.
 - A terminal with `bash`, `git`, and `date` (macOS or Linux).
-- Access to the sources you want: Slack, Linear, and/or Notion.
+- Access to the sources you want: Slack, Linear, and/or Notion, and optionally
+  Google Calendar / Google Drive.
 - (Optional) [Obsidian](https://obsidian.md) to open the folder as a vault and
   get the graph view. Everything works without it — it's just markdown.
 
@@ -44,14 +45,49 @@ important step; skipping it silently loses your raw memory layer.
 In Claude Code, run `/mcp` and connect the connectors for the sources you
 enabled. The ops call these tool families:
 
-| Source | What you need |
-|---|---|
-| Slack  | a Slack MCP with search + thread-read + send-message |
-| Linear | a Linear MCP with list/get issues, projects, initiatives, docs, comments |
-| Notion | a Notion MCP with search, fetch, comments, data-source query |
+| Source | What you need | Default | Status |
+|---|---|---|---|
+| Slack  | a Slack MCP with search + thread-read + send-message | `enabled: true` | works |
+| Linear | a Linear MCP with list/get issues, projects, initiatives, docs, comments | `enabled: true` | works |
+| Notion | a Notion MCP with search, fetch, comments, data-source query | `enabled: true` | works |
+| Google Calendar | Calendar MCP with `list_calendars`, `list_events`, `get_event` | `enabled: false` | works, opt-in |
+| Google Drive | Drive MCP with `search_files`, `list_recent_files`, `read_file_content` | `enabled: false` | works, opt-in |
+| Gmail | *(not usable yet — see below)* | `enabled: false` | **op not written** |
+
+**Two different meanings of `enabled: false`, don't confuse them.** Calendar and
+Drive are implemented and validated against a real account; they ship off only
+so you opt into pulling personal-account data deliberately. Flip them to `true`
+once `/mcp` shows the connector working and you get a real sync.
+
+**Gmail is different: there is no `sync gmail` op.** Setting `enabled: true`
+does nothing. The spec is written (CLAUDE.md § Sync (Gmail)) and the directory
+is scaffolded, but the fetch was never built, and separately the Gmail connector
+must be granted mail scopes before it could run at all. Because a silent `0`
+would be indistinguishable from a working source with nothing new, that class
+reports `gmail/threads=SKIPPED-not-implemented` in every `Deltas walked:` line.
+That is expected output, not a fault.
 
 If a connector isn't available for a source, set `enabled: false` for it in
 `config.yaml` and the ops will skip it.
+
+**A Google connector shows up before it works.** Until you connect it in
+`/mcp`, it exposes only `authenticate` / `complete_authentication` — the real
+tools do not exist yet, so a sync would find nothing and look broken. And plenty
+of Workspace tenants block third-party Drive/Gmail OAuth scopes at the admin
+level, so you may not be able to enable them at all. Flip `enabled: true` only
+once `/mcp` shows the connector actually returning data.
+
+**First run of a Google source is slow.** With no `.last-sync` yet, the source
+back-fills `bootstrap_horizon_days` of history once (default 365) before
+settling into the rolling window. That is expected, not a hang.
+
+**Read the sensitivity denylist before enabling Calendar or Drive.** These are
+personal accounts (the denylist also covers Gmail, whenever its op lands).
+`config.yaml`'s `exclude_labels` / `exclude_categories` / `exclude_folders` /
+`include_private` are applied at fetch time so excluded
+content never lands on disk. `.gitignore` only keeps things out of git — it does
+not keep them out of the plaintext files every vault session reads, or out of
+synthesized wiki pages.
 
 ## 4. Fill in your config
 
@@ -124,18 +160,32 @@ answering things faster than you could find them.
   across multiple Claude Code projects (it re-links memory dirs; a dangling
   symlink is skipped silently).
 - `lint` occasionally to catch orphans, stale pages, dead links, and taxonomy
-  drift. `bash scripts/linkrot-lint.sh` is the mechanical half.
+  drift. `bash scripts/linkrot-lint.sh` is the mechanical half — it should exit
+  `0` and print **six** sections. Anything less means it aborted early.
+- `bash tests/run.sh` after changing anything in `scripts/` or `.gitignore`.
+  It pins the watermark-cutoff behaviour, the both-directions leak test, and the
+  version-skew guard between `delta-walk.sh` and `raw-classes.sh`.
 
 ## Troubleshooting
 
-- **`sync` finds nothing** — check the MCP is connected (`/mcp`) and your
-  `config.yaml` IDs/team are right.
+- **`sync` finds nothing** — check the MCP is connected (`/mcp`), that the
+  source is `enabled: true`, and that your `config.yaml` IDs/team are right.
+- **`lint` prints a short, clean-looking report** — count the sections. A report
+  that stops before `## 2.` has aborted, not passed. `bash tests/run.sh` checks
+  this specifically.
 - **`ingest` walks 0 files** — the watermark (`wiki/.last-ingest`) may be ahead
   of your raw file dates, or a project symlink is dangling. See the ingest op in
   `CLAUDE.md`.
 - **A daily-file write got blocked** — you're likely running Claude Code from
   outside the vault. `cd` into the vault and launch `claude` from there (see
   step 1), or add the vault path to your allowed dirs.
+- **`Deltas walked:` says `gmail/threads=SKIPPED-not-implemented`** — expected.
+  There is no `sync gmail` op yet. The class is reported explicitly rather than
+  as `0`, because a `0` would be indistinguishable from a working source with an
+  empty delta. Nothing to fix.
+- **`RAW_UNIMPLEMENTED: unbound variable`, or `raw-classes.sh ... is stale`** —
+  you have a newer `scripts/delta-walk.sh` beside an older
+  `scripts/raw-classes.sh`. They are updated together; copy both.
 - **Memories vanished** — you skipped step 2. Set `cleanupPeriodDays`.
 - **Want to version your vault** — do it in a *separate private repo*. Don't
   push your data back to this template; that's what `.gitignore` protects.

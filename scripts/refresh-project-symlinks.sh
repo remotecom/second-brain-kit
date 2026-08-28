@@ -2,8 +2,8 @@
 # refresh-project-symlinks.sh — keep projects/* symlinks aligned with live
 # Claude Code memory dirs. Run from the vault root BEFORE each ingest.
 #
-#   bash docs/audits/refresh-project-symlinks.sh        # create missing, report dangling (default)
-#   bash docs/audits/refresh-project-symlinks.sh --prune # ALSO remove dangling symlinks (destructive)
+#   bash scripts/refresh-project-symlinks.sh        # create missing, report dangling (default)
+#   bash scripts/refresh-project-symlinks.sh --prune # ALSO remove dangling symlinks (destructive)
 #
 # Rationale: memory lives inside ephemeral transcript dirs
 # (~/.claude/projects/<encoded-cwd>/memory). When a repo is opened from a new
@@ -11,7 +11,7 @@
 # symlinks dangle silently. This re-aligns them. See
 # reference-memory-retention-and-vault-symlinks memory + the linkrot audit.
 set -euo pipefail
-cd "$(dirname "$0")/../.."   # vault root
+cd "$(dirname "$0")/.."   # vault root
 PRUNE=${1:-}
 
 CLAUDE_PROJECTS="$HOME/.claude/projects"
@@ -54,7 +54,7 @@ for l in projects/*; do
     fi
   fi
 done
-[ "$found_dangle" = 0 ] && echo "  (none)"
+if [ "$found_dangle" = 0 ]; then echo "  (none)"; fi
 
 echo ""
-echo "Done. Run 'bash docs/audits/linkrot-lint.sh' for the full link-integrity report."
+echo "Done. Run 'bash scripts/linkrot-lint.sh' for the full link-integrity report."
