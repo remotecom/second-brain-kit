@@ -131,6 +131,45 @@ is "delta-walk does not count README.md as raw content" "0" \
    "$(bash scripts/delta-walk.sh "2020-01-01T00:00:00Z" 2>/dev/null | tr ',' '\n' | grep 'slack/=' | tr -dc '0-9')"
 rm -f "$PROBE_GCAL"
 
+# --- Unimplemented classes report SKIPPED, never 0 -------------------------
+# A class with no sync op that reports `0` is indistinguishable from a working
+# source with an empty delta — a permanently dead source reading as a healthy
+# one. This is the whole reason RAW_UNIMPLEMENTED exists.
+. scripts/raw-classes.sh
+is  "RAW_UNIMPLEMENTED is non-empty (gmail has no op yet)" \
+    "gmail/threads" "$RAW_UNIMPLEMENTED"
+has "gmail/threads reports SKIPPED, not a count" "$dw" "gmail/threads=SKIPPED-not-implemented"
+hasnt "gmail/threads never reports a bare 0" "$dw" "gmail/threads=0"
+
+# Every class NOT in RAW_UNIMPLEMENTED must still report a real number, or the
+# SKIPPED path has leaked into implemented sources.
+for cls in "projects/" "slack/" "gdrive/files" "gcal/"; do
+  v=$(printf '%s' "$dw" | tr ',' '\n' | grep -- "$cls=" | sed 's/.*=//' | tr -d ' ')
+  case "$v" in
+    ''|*[!0-9]*) bad "implemented class $cls reports a number" "digits" "$v" ;;
+    *)           ok  "implemented class $cls reports a number ($v)" ;;
+  esac
+done
+
+# A file appearing in an unimplemented class is a REAL finding and must surface
+# as a count, not be swallowed by the SKIPPED label.
+PROBE_GMAIL="gmail/threads/_test_probe.md"
+printf -- '# probe\n' > "$PROBE_GMAIL"
+dw_probe=$(bash scripts/delta-walk.sh "2020-01-01T00:00:00Z" 2>/dev/null)
+hasnt "a file in an unimplemented class is NOT hidden behind SKIPPED" \
+      "$dw_probe" "gmail/threads=SKIPPED"
+has   "…it surfaces as a real count instead" "$dw_probe" "gmail/threads=1"
+rm -f "$VAULT_ROOT/$PROBE_GMAIL"
+
+# --- CLAUDE.md and config must not contradict each other -------------------
+# config.example.yaml ships person_external_min: 2 because Gmail floods
+# wiki/people/ at 1. CLAUDE.md used to hardcode "1 substantive thread".
+hasnt "CLAUDE.md does not hardcode the old external-person threshold of 1" \
+      "$(cat CLAUDE.md)" "External people (partner/vendor DRIs): \*\*1 substantive thread\*\*"
+has   "CLAUDE.md documents a Sync (Gmail) op (config.example.yaml points at it)" \
+      "$(cat CLAUDE.md)" "### Sync (Gmail)"
+has   "config ships person_external_min: 2" "$(cat config.example.yaml)" "person_external_min: 2"
+
 # ===========================================================================
 sect "5. Leak test — BOTH directions"
 # ===========================================================================

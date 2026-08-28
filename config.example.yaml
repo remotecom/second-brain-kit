@@ -95,12 +95,21 @@ sources:
     max_body_chars: 50000
 
   gmail:
+    # SPECIFIED BUT DISABLED. The connector holds no mail scopes ("Insufficient
+    # scope" from list_labels). Re-auth in /mcp first, then see the enabling
+    # checklist in CLAUDE.md — enabling requires THREE edits in one change, one
+    # of which is wiki.promotion.person_external_min below.
     enabled: false
     rolling_window_days: 4
     bootstrap_horizon_days: 365
     # Hard ceiling per run. On truncation the watermark must NOT jump past the
     # threads that were dropped — see the Gmail op in CLAUDE.md.
     max_threads_per_sync: 150
+    # Thread bodies over this length truncate with an explicit marker and
+    # `truncated: true`. A declared cap, never per-thread judgment.
+    max_body_chars: 12000
+    # NOTE: exclude_labels takes label IDs, not display names. Resolve them with
+    # list_labels once the connector is authorized.
     exclude_labels: []
     exclude_categories: ["promotions", "social", "forums"]
     strip_quoted_replies: true      # else a 20-message thread stores itself 20x

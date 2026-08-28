@@ -35,13 +35,18 @@ else
   RAW_CUTOFF=""   # bootstrap: no watermark yet, walk everything
 fi
 
-# --- THE CUTOFF TRAP (both halves are load-bearing on BSD/macOS find) --------
-#   s/Z$//  BSD find silently REJECTS the trailing Z and returns ZERO matches.
-#   s/T/ /  With the T separator BSD find mis-parses and UNDER-filters, pulling
-#           in already-ingested files. That one is the dangerous direction: it
-#           returns too many, not zero, so it looks like legitimate work while
-#           silently re-folding stale content into the wiki.
-# Tested in tests/run.sh. Do not "simplify" this line.
+# --- THE CUTOFF TRAP --------------------------------------------------------
+#   s/Z$//  LOAD-BEARING. BSD find cannot parse the trailing Z: it exits 1 with
+#           "Can't parse date/time". Invoked the way ingest invokes it
+#           (2>/dev/null | wc -l) the error vanishes and you get a silent ZERO —
+#           an entire ingest that walks nothing and reports it as nothing to do.
+#   s/T/ /  DEFENSIVE ONLY, not load-bearing on this platform. An earlier
+#           revision claimed the T separator makes BSD find UNDER-filter and
+#           return too many files. That does NOT reproduce on macOS 15.6.1:
+#           with Z stripped, the T form and the space form match identically
+#           (pinned in tests/run.sh section 1d). Kept as cheap insurance for
+#           other BSD variants; do not cite the old warning as fact.
+# Do not "simplify" this line.
 if [ -n "$RAW_CUTOFF" ]; then
   CUTOFF=$(printf '%s' "$RAW_CUTOFF" | sed 's/Z$//; s/T/ /')
 else
@@ -66,6 +71,12 @@ count_for() {
   fi
 }
 
+# A class listed in RAW_UNIMPLEMENTED has no sync op, so `0` would be a lie of
+# the exact kind the Deltas line exists to catch. Report SKIPPED instead.
+is_unimplemented() {
+  case " $RAW_UNIMPLEMENTED " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+
 line="Deltas walked:"
 sep=" "
 for d in $RAW_SUBPATHS; do
@@ -74,7 +85,13 @@ for d in $RAW_SUBPATHS; do
     projects|slack|gcal) label="$d/" ;;
     *)                   label="$d"  ;;
   esac
-  line="${line}${sep}${label}=${n}"
+  if is_unimplemented "$d" && [ "$n" = 0 ]; then
+    line="${line}${sep}${label}=SKIPPED-not-implemented"
+  else
+    # Files present in a class with no sync op is itself a real finding, so the
+    # true count is reported rather than swallowed by the SKIPPED label.
+    line="${line}${sep}${label}=${n}"
+  fi
   sep=", "
 done
 echo "$line"

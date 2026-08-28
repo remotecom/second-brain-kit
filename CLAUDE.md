@@ -27,9 +27,10 @@ the method, not the data. Values in `{{DOUBLE_BRACES}}` come from `config.yaml`.
   filenames.
 - `gdrive/.last-sync` — most recent Drive `modifiedTime`. `gdrive/.allowlist` —
   watched folders.
-- `gmail/threads/*.md` — **RAW, immutable.** Forward-sync (`sync gmail`), one
-  file per *thread* (not per day — email threads span months and a daily file
-  would tear them in half).
+- `gmail/threads/*.md` — **RAW, immutable.** One file per *thread* (not per day
+  — email threads span months and a daily file would tear them in half).
+  **`sync gmail` is specified but DISABLED** (connector lacks mail scopes); the
+  class reports `SKIPPED-not-implemented`, never `0`.
 - `gmail/.last-sync` — most recent message `date`.
 - `gcal/*.md` — **RAW, immutable.** Forward-sync (`sync gcal`) daily notes.
 - `gcal/.last-sync` — most recent event `updated`.
@@ -55,7 +56,10 @@ solutions-architecture function — swap it for yours. Plus:
 
 **Promotion thresholds** (when a raw mention earns its own page — tune in config):
 - Most entity types: **≥ `{{PROMOTION_MIN_SOURCES}}` raw sources** (default 3).
-- External people (partner/vendor DRIs): **1 substantive thread** sufficient.
+- External people (partner/vendor DRIs): **≥ `{{PERSON_EXTERNAL_MIN}}`
+  substantive threads** (default 2). This ships at 2, not 1, because Gmail
+  floods `people/` with every vendor and recruiter the moment it is enabled —
+  see the Gmail op. Safe at 1 only if you never enable Gmail.
 - Internal people: promote only on direct engagement (you @-mentioned/assigned
   them, or shared a thread) — not mere mention.
 - `concepts/` — a term referenced **≥3×** across raw with no explainer yet.
@@ -429,6 +433,109 @@ When you say **"sync gdrive"** (or "sync drive"):
 `parentId`. `fileSize` on a Google-native doc is not its text length. There is no
 change feed, so deletions are invisible until probed (lint check 11).
 
+### Sync (Gmail) — SPEC LANDED, OP DISABLED
+
+**Status: `sources.gmail.enabled: false`. Do not run this op yet.** It is
+specified here so its absence is explicit rather than discovered mid-sync, and
+so the design is not re-derived (or re-improvised) the day the blocker clears.
+
+**The blocker is authorization, not design.** `list_labels` and `search_threads`
+both return `Insufficient scope` — the Gmail connector is registered on the
+account but holds no `gmail.readonly` / `gmail.metadata` / `gmail.labels` grant.
+Re-authorize Gmail in `/mcp`, confirm `list_labels` returns, *then* enable.
+
+**Every op that walks the class list reports `gmail/threads=SKIPPED-not-implemented`,
+never `0`.** A silent zero is indistinguishable from a working source with an
+empty delta — the exact failure mode the `Deltas walked:` line exists to catch.
+`scripts/raw-classes.sh` carries `gmail/threads` in `RAW_UNIMPLEMENTED` and
+`delta-walk.sh` emits this automatically, so this is not something to remember.
+
+#### Enabling it — three things land in ONE change, never sequentially
+
+1. **Re-auth the connector** and verify `list_labels` returns real labels. The
+   `exclude_labels` denylist is specified by label *ID*, not display name, so
+   the IDs must be resolved and written into `config.yaml` before the first
+   fetch — not after.
+2. **Flip `sources.gmail.enabled: true`** and clear `gmail/threads` from
+   `RAW_UNIMPLEMENTED` in `scripts/raw-classes.sh`.
+3. **Raise `wiki.promotion.person_external_min` from 1 to 2.** At 1, a single
+   substantive thread promotes an external person, and Gmail hands
+   `wiki/people/` every vendor, recruiter, and one-off contact who has ever
+   emailed you. This is not cleanup to do afterwards — the first `ingest` after
+   enabling Gmail permanently pollutes the graph, and un-promoting pages is
+   manual work the kit has no op for. `config.example.yaml` already ships `2`
+   for this reason; the value is only safe at `1` if you never enable Gmail.
+
+#### The op (when enabled)
+
+Follows the standard sync contract. Deltas from it:
+
+1. **Threshold.** Last **`{{GMAIL_WINDOW}}`** days; effective threshold =
+   MIN(window_start, watermark). Bootstrap over `bootstrap_horizon_days`.
+
+2. **Watermark.** `gmail/.last-sync` = most recent message `date` seen. Forward
+   only.
+
+3. **Client-side threshold re-apply — mandatory.** Gmail's `after:` operator is
+   **date-granular** (`YYYY/MM/DD`) and cannot express a timestamp. Query
+   `after:` the threshold's *date*, then discard messages older than the actual
+   threshold **per message, client-side**. Skipping this silently re-ingests up
+   to a full day of already-synced mail on every run.
+
+4. **Query shape: a bare `after:<date>` window.** Do **not** scope with
+   `in:sent` — that was the coverage bug: it drops every thread where someone
+   wrote to you and you had not yet replied, which is most of the inbound
+   signal. Noise is handled by the denylist (step 5), not by narrowing the query.
+
+5. **Sensitivity denylist, applied at FETCH time.** Drop threads matching
+   `exclude_labels` (label IDs) or `exclude_categories` (default:
+   `promotions`, `social`, `forums`) **before** any body is fetched, so excluded
+   mail never reaches disk. This is a personal mailbox holding comp, HR,
+   recruiting and medical content. Config-declared, never model judgment.
+   **Count every exclusion and report the count.**
+
+6. **Pre-fetch skip.** Compare each thread `id`'s latest message `date` against
+   `gmail/.state.json`; unchanged ⇒ skip the body fetch entirely.
+
+7. **Fetch bodies as `PLAIN_TEXT`.** The connector's `FULL_CONTENT` default
+   returns the HTML body as well and will exhaust context on a real mailbox.
+
+8. **Write `gmail/threads/<threadId>.md` — one file per THREAD, not per day.**
+   Email threads run for months; a daily file would tear one conversation across
+   two files and the wiki would cite two halves of it. Rewriting the whole
+   thread file when a new message lands is the self-healing mechanism. Apply the
+   content-hash skip as with Linear/Notion.
+
+   **Strip quoted reply chains and signatures.** The plaintext body re-embeds
+   the entire preceding conversation in every message, so a 20-message thread
+   would otherwise store itself twenty times. This is a mechanical rule
+   (quote-prefixed and `On <date>, <person> wrote:` blocks), **not** editorial
+   judgment about which prose matters — a sync agent may never decide a passage
+   is boilerplate. Bodies over `max_body_chars` truncate with an explicit marker
+   and `truncated: true`.
+
+   Frontmatter: `thread_id`, `subject`, `participants`, `message_count`,
+   `first_message_date`, `last_message_date`, `label_ids`, `truncated`.
+
+9. **Truncation must not advance the watermark past what it dropped.**
+   `max_threads_per_sync` is a hard ceiling, and `search_threads` **documents no
+   ordering guarantee** — so on truncation you cannot assume the dropped threads
+   are the oldest. Set the watermark to the oldest message `date` among threads
+   actually *written*, and report the truncation. Advancing to MAX would strand
+   every dropped thread permanently below the watermark, where no later run
+   reaches it.
+
+10. **Verification gate** (every `WRITTEN` file has mtime > `$START`), then
+    watermark, then **report**: threads found / excluded-by-label /
+    excluded-by-category / pre-fetch-skipped / written / hash-skipped /
+    truncated.
+
+**Gmail MCP caveats:** `after:`/`before:` are date-granular only. `label:`
+accepts label **IDs**, not display names — resolve via `list_labels`. Gmail
+matches a thread if *any* message matches, so a negated term (`-is:starred`)
+still returns threads containing one non-matching message; re-filter
+client-side. There is no deletion feed (lint check 11).
+
 ### Ingest
 
 When you say **"ingest":**
@@ -486,7 +593,7 @@ the watermark write and the log header — don't type a guessed timestamp.
 
    ```
    ## [YYYY-MM-DD HH:MM] ingest | <one-line summary>
-   Deltas walked: projects/=N, slack/=N, linear/issues=N, linear/projects=N, linear/initiatives=N, linear/docs=N, notion/pages=N, notion/databases=N, gdrive/files=N, gmail/threads=N, gcal/=N
+   Deltas walked: projects/=N, slack/=N, linear/issues=N, linear/projects=N, linear/initiatives=N, linear/docs=N, notion/pages=N, notion/databases=N, gdrive/files=N, gmail/threads=SKIPPED-not-implemented, gcal/=N
    Sources touched:
    - <raw file>
    Wiki pages updated:

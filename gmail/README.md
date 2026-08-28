@@ -1,4 +1,20 @@
-# `gmail/` — raw, immutable (Gmail forward-sync)
+# `gmail/` — raw, immutable (Gmail forward-sync) — **DISABLED**
+
+> **Status: spec landed, op disabled.** `sources.gmail.enabled: false`. Nothing
+> writes here yet. The blocker is **authorization, not design**: the Gmail
+> connector returns `Insufficient scope` — it is registered on the account but
+> holds no `gmail.readonly` / `gmail.metadata` / `gmail.labels` grant. Re-auth
+> in `/mcp`, then follow the three-step enabling checklist in CLAUDE.md
+> § Sync (Gmail). One of those steps raises `person_external_min` and **must**
+> land in the same change, or the first ingest floods `wiki/people/`.
+>
+> This directory exists so the raw-class list, `.gitignore`, `delta-walk.sh` and
+> the ingest `Deltas walked:` line already carry the class. It reports
+> `gmail/threads=SKIPPED-not-implemented`, never `0` — a silent zero is
+> indistinguishable from a working source with an empty delta.
+
+The design below is already settled; these are connector facts, not preferences.
+
 
 **What lives here:** `threads/` — written by `sync gmail`, **one file per
 thread**, not per day. Email threads run for months; a daily file would tear a
