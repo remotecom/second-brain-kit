@@ -12,10 +12,12 @@ your sources, and it compounds from there.
 ## The three layers
 
 1. **Raw sync (immutable).** `sync slack` / `sync linear` / `sync notion` /
-   `sync gdrive` / `sync gmail` / `sync gcal` pull your activity into flat
-   markdown, governed by watermarks, rolling re-fetch windows, content-hash
-   idempotency, pre-fetch skip state, and verification gates. The Google sources
-   ship disabled — see SETUP.md.
+   `sync gcal` / `sync gdrive` pull your activity into flat markdown, governed
+   by watermarks, rolling re-fetch windows, content-hash idempotency, pre-fetch
+   skip state, and verification gates. All five ship **disabled or enabled per
+   source** in `config.yaml` — see SETUP.md.
+   `sync gmail` is **specified but not implemented yet**; its class reports
+   `SKIPPED-not-implemented` rather than a misleading `0`.
 2. **LLM-maintained wiki.** `ingest` folds new raw deltas into synthesized,
    cross-linked pages (people, initiatives, concepts, workflows, and whatever
    entity types matter for your function) under explicit promotion thresholds.
@@ -75,5 +77,13 @@ forgotten you knew. Give it a few weeks before you judge it.
 
 - [Claude Code](https://claude.com/claude-code)
 - MCP connectors for the sources you enable: Slack, Linear, Notion, and
-  optionally Google Drive / Gmail / Calendar
+  optionally Google Calendar / Google Drive. (A Gmail connector isn't useful
+  yet — the op isn't written.)
 - `bash`, `git`, `date` (macOS/Linux). Optional: Obsidian for the visual layer.
+
+## Contributing
+
+`scripts/raw-classes.sh` is the single source of truth for what counts as a raw
+layer; add a source there and nowhere else. Run `bash tests/run.sh` after
+touching anything in `scripts/` or `.gitignore` — it pins the watermark-cutoff
+behaviour, the both-directions leak test, and the version-skew guard.
