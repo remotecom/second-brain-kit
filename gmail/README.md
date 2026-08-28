@@ -17,7 +17,10 @@ The design below is already settled; these are connector facts, not preferences.
 
 
 **What lives here:** `threads/` — written by `sync gmail`, **one file per
-thread**, not per day. Email threads run for months; a daily file would tear a
+thread**, not per day, named
+`YYYY-MM-DD-<subject-slug>-<shortid>.md` (first-message date, so the name is
+stable as the thread grows). Deliberately not bare thread IDs: Gmail is the
+largest raw class by file count and a graph view of opaque hex is unusable. Email threads run for months; a daily file would tear a
 single conversation across two files and the wiki would then cite two halves of
 it. Rewriting the thread file when a new message lands is the self-healing
 mechanism.

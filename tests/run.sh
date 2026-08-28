@@ -104,7 +104,17 @@ is "Deltas line reports exactly 11 classes" "11" "$(printf '%s' "$dw" | tr ',' '
 # Plant a REAL raw file with a known mtime — do not lean on README.md, which
 # delta-walk deliberately excludes as kit documentation rather than content.
 PROBE_GCAL="gcal/_test_probe.md"
-cleanup_all() { rm -rf "$TD"; cleanup_probes; rm -f "$VAULT_ROOT/$PROBE_GCAL"; }
+# Declared before the trap so cleanup_all can reference it even if the suite
+# dies before section 4 creates it. It previously survived only because its
+# literal path was byte-identical to PROBE_RAW, which cleanup_probes happens to
+# sweep — a coincidence, not a guarantee, that any rename would have silently
+# removed. A leak here is invisible (gmail/threads is gitignored) and permanent:
+# a stray file flips delta-walk from SKIPPED-not-implemented to a stale count.
+PROBE_GMAIL="gmail/threads/_test_probe_gmail.md"
+cleanup_all() {
+  rm -rf "$TD"; cleanup_probes
+  rm -f "$VAULT_ROOT/$PROBE_GCAL" "$VAULT_ROOT/$PROBE_GMAIL"
+}
 trap cleanup_all EXIT
 printf -- '# probe\n' > "$PROBE_GCAL"; touch -t 202608180000 "$PROBE_GCAL"
 
@@ -143,7 +153,11 @@ hasnt "gmail/threads never reports a bare 0" "$dw" "gmail/threads=0"
 
 # Every class NOT in RAW_UNIMPLEMENTED must still report a real number, or the
 # SKIPPED path has leaked into implemented sources.
-for cls in "projects/" "slack/" "gdrive/files" "gcal/"; do
+# Derived from RAW_SUBPATHS minus RAW_UNIMPLEMENTED so a class added later is
+# covered automatically. The old hardcoded 4-item list checked 4 of 10.
+for d in $RAW_SUBPATHS; do
+  case " $RAW_UNIMPLEMENTED " in *" $d "*) continue ;; esac
+  case "$d" in projects|slack|gcal) cls="$d/" ;; *) cls="$d" ;; esac
   v=$(printf '%s' "$dw" | tr ',' '\n' | grep -- "$cls=" | sed 's/.*=//' | tr -d ' ')
   case "$v" in
     ''|*[!0-9]*) bad "implemented class $cls reports a number" "digits" "$v" ;;
@@ -153,12 +167,14 @@ done
 
 # A file appearing in an unimplemented class is a REAL finding and must surface
 # as a count, not be swallowed by the SKIPPED label.
-PROBE_GMAIL="gmail/threads/_test_probe.md"
-printf -- '# probe\n' > "$PROBE_GMAIL"
+printf -- '# probe\n' > "$VAULT_ROOT/$PROBE_GMAIL"
 dw_probe=$(bash scripts/delta-walk.sh "2020-01-01T00:00:00Z" 2>/dev/null)
 hasnt "a file in an unimplemented class is NOT hidden behind SKIPPED" \
       "$dw_probe" "gmail/threads=SKIPPED"
 has   "…it surfaces as a real count instead" "$dw_probe" "gmail/threads=1"
+# The summary line and --list must agree; they are separate code paths.
+list_probe=$(bash scripts/delta-walk.sh --list "2020-01-01T00:00:00Z" 2>/dev/null)
+has "--list surfaces the file the summary line counted" "$list_probe" "_test_probe_gmail.md"
 rm -f "$VAULT_ROOT/$PROBE_GMAIL"
 
 # --- CLAUDE.md and config must not contradict each other -------------------
@@ -169,6 +185,52 @@ hasnt "CLAUDE.md does not hardcode the old external-person threshold of 1" \
 has   "CLAUDE.md documents a Sync (Gmail) op (config.example.yaml points at it)" \
       "$(cat CLAUDE.md)" "### Sync (Gmail)"
 has   "config ships person_external_min: 2" "$(cat config.example.yaml)" "person_external_min: 2"
+
+# ===========================================================================
+sect "4b. Version skew — delta-walk.sh vs a stale raw-classes.sh"
+# ===========================================================================
+# scripts/ is copied piecemeal into other people's vaults, so a NEW
+# delta-walk.sh beside a STALE raw-classes.sh is a real configuration. Before
+# the guard, this aborted under `set -u` and printed NOTHING — no Deltas line
+# at all, from the script whose one job is that a class never goes missing.
+SKEW=$(mktemp -d)
+# Covered by the trap from CREATION, not by the manual rm at the end of this
+# section — the same bug class fixed for PROBE_GMAIL above. An interrupt
+# between here and there would otherwise leak the dir in $TMPDIR permanently.
+trap 'cleanup_all; rm -rf "$SKEW"' EXIT
+mkdir -p "$SKEW/scripts"
+for d in $RAW_SUBPATHS; do mkdir -p "$SKEW/$d"; done
+mkdir -p "$SKEW/wiki"
+cp "$VAULT_ROOT/scripts/delta-walk.sh" "$SKEW/scripts/"
+
+# (a) Optional var absent -> degrade gracefully, still emit the full line.
+printf '#!/usr/bin/env bash\nRAW_CLASSES="%s"\nRAW_SUBPATHS="%s"\n' \
+  "$RAW_CLASSES" "$RAW_SUBPATHS" > "$SKEW/scripts/raw-classes.sh"
+skew_out=$(cd "$SKEW" && bash scripts/delta-walk.sh 2>&1); skew_rc=$?
+is  "stale raw-classes.sh (no RAW_UNIMPLEMENTED) still exits 0" "0" "$skew_rc"
+has "…and still emits the Deltas line"        "$skew_out" "Deltas walked:"
+has "…naming every class, none missing"       "$skew_out" "gmail/threads="
+hasnt "…with no unbound-variable abort"       "$skew_out" "unbound variable"
+
+# (b) REQUIRED var absent -> fail loudly, and name the file that is stale.
+printf '#!/usr/bin/env bash\nRAW_CLASSES="projects"\n' > "$SKEW/scripts/raw-classes.sh"
+hard_out=$(cd "$SKEW" && bash scripts/delta-walk.sh 2>&1); hard_rc=$?
+is  "raw-classes.sh missing RAW_SUBPATHS exits non-zero" "1" "$hard_rc"
+has "…and names the stale file, not a bash line number" "$hard_out" "raw-classes.sh"
+hasnt "…and does not leak a bare unbound-variable error" "$hard_out" "unbound variable"
+
+# (c) RAW_UNIMPLEMENTED with MULTIPLE entries — the shape the comment
+#     anticipates when a second scaffolded source lands. Only the listed
+#     classes may render SKIPPED.
+printf '#!/usr/bin/env bash\nRAW_CLASSES="%s"\nRAW_SUBPATHS="%s"\nRAW_UNIMPLEMENTED="gmail/threads notion/pages"\n' \
+  "$RAW_CLASSES" "$RAW_SUBPATHS" > "$SKEW/scripts/raw-classes.sh"
+multi=$(cd "$SKEW" && bash scripts/delta-walk.sh 2>/dev/null)
+has   "multi-entry: gmail/threads renders SKIPPED"  "$multi" "gmail/threads=SKIPPED-not-implemented"
+has   "multi-entry: notion/pages renders SKIPPED"   "$multi" "notion/pages=SKIPPED-not-implemented"
+hasnt "multi-entry: notion/databases does NOT (word-boundary match)" \
+      "$multi" "notion/databases=SKIPPED"
+has   "multi-entry: notion/databases still reports a count" "$multi" "notion/databases=0"
+rm -rf "$SKEW"
 
 # ===========================================================================
 sect "5. Leak test — BOTH directions"

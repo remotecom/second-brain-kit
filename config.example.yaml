@@ -102,8 +102,11 @@ sources:
     enabled: false
     rolling_window_days: 4
     bootstrap_horizon_days: 365
-    # Hard ceiling per run. On truncation the watermark must NOT jump past the
-    # threads that were dropped — see the Gmail op in CLAUDE.md.
+    # Self-imposed cost ceiling per run, NOT a connector limit (search_threads
+    # paginates via pageToken). On truncation the op halves the window and
+    # re-runs each half until every sub-window fits — it must never clamp the
+    # watermark, because search_threads guarantees no ordering and the dropped
+    # threads may be newer than any clamp. See the Gmail op in CLAUDE.md.
     max_threads_per_sync: 150
     # Thread bodies over this length truncate with an explicit marker and
     # `truncated: true`. A declared cap, never per-thread judgment.

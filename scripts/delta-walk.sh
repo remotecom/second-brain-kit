@@ -17,6 +17,25 @@ cd "$(dirname "$0")/.."   # vault root
 # shellcheck source=raw-classes.sh
 . "$(dirname "$0")/raw-classes.sh"
 
+# --- VERSION-SKEW GUARD (must sit before the first use of any RAW_* var) -----
+# scripts/ gets copied piecemeal into other people's vaults, so a NEW
+# delta-walk.sh beside a STALE raw-classes.sh is a real configuration, not a
+# hypothetical. Under `set -u` that skew aborts mid-script; and because the
+# whole `Deltas walked:` line is assembled in a loop before a single echo, the
+# abort prints NOTHING — not even the classes ahead of the failure. A script
+# whose one job is "a class can never go missing from the line" would emit no
+# line at all. So: default what is optional, hard-fail what is required, and
+# say WHICH file is stale instead of leaking a bare bash line number.
+: "${RAW_UNIMPLEMENTED:=}"
+for _req in RAW_SUBPATHS RAW_CLASSES; do
+  eval "_v=\${$_req:-}"
+  if [ -z "$_v" ]; then
+    echo "ERROR: scripts/raw-classes.sh did not define $_req — it is stale or missing." >&2
+    echo "       delta-walk.sh and raw-classes.sh must be updated together." >&2
+    exit 1
+  fi
+done
+
 LIST=0
 ARG=""
 for a in "$@"; do

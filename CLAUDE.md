@@ -156,6 +156,8 @@ nothing changed.
 - **Gmail** must re-apply the threshold client-side; its `after:` operator is
   date-granular (`YYYY/MM/DD`) and cannot express a timestamp.
 - **Calendar** has no separate body fetch, so step 3 is a no-op there.
+- **Calendar** also has no content-hash skip, for the same reason as Slack —
+  the in-window overwrite is what self-heals reschedules and cancellations.
 
 ### Sensitivity denylist (Google sources)
 
@@ -458,7 +460,14 @@ empty delta — the exact failure mode the `Deltas walked:` line exists to catch
    fetch — not after.
 2. **Flip `sources.gmail.enabled: true`** and clear `gmail/threads` from
    `RAW_UNIMPLEMENTED` in `scripts/raw-classes.sh`.
-3. **Raise `wiki.promotion.person_external_min` from 1 to 2.** At 1, a single
+3. **Sweep the prose that describes Gmail as disabled**, all in one pass:
+   this section's `— SPEC LANDED, OP DISABLED` heading, the
+   `gmail/threads/*.md` bullet in Layout, the `SKIPPED-not-implemented` claim
+   just above, the ingest `Deltas walked:` example line, and the banner at the
+   top of `gmail/README.md`. None of these is load-bearing (delta-walk.sh reads
+   `RAW_UNIMPLEMENTED` at runtime), but each reads as false the day Gmail
+   ships, and this checklist exists precisely so the change is one-shot.
+4. **Raise `wiki.promotion.person_external_min` from 1 to 2.** At 1, a single
    substantive thread promotes an external person, and Gmail hands
    `wiki/people/` every vendor, recruiter, and one-off contact who has ever
    emailed you. This is not cleanup to do afterwards — the first `ingest` after
@@ -500,11 +509,40 @@ Follows the standard sync contract. Deltas from it:
 7. **Fetch bodies as `PLAIN_TEXT`.** The connector's `FULL_CONTENT` default
    returns the HTML body as well and will exhaust context on a real mailbox.
 
-8. **Write `gmail/threads/<threadId>.md` — one file per THREAD, not per day.**
-   Email threads run for months; a daily file would tear one conversation across
-   two files and the wiki would cite two halves of it. Rewriting the whole
-   thread file when a new message lands is the self-healing mechanism. Apply the
-   content-hash skip as with Linear/Notion.
+8. **Write `gmail/threads/YYYY-MM-DD-<subject-slug>-<shortid>.md` — one file
+   per THREAD, not per day.** Email threads run for months; a daily file would
+   tear one conversation across two files and the wiki would cite two halves of
+   it. Rewriting the whole thread file when a new message lands is the
+   self-healing mechanism. Apply the content-hash skip as with Linear/Notion.
+
+   **Not bare thread IDs**, unlike `gdrive/files/<fileId>.md` and
+   `notion/pages/<uuid>.md`. Gmail will be the largest raw class by file count,
+   and the README sells Obsidian graph view — a graph of opaque hex is unusable.
+   The filename rule is mechanical, so it is not model discretion:
+   - `YYYY-MM-DD` = the thread's **first** message date, so the file keeps its
+     name as the thread grows. Never the latest message date, which would
+     rename (and thus duplicate) the file on every reply.
+   - `<subject-slug>` = the first message's subject, lowercased, `Re:`/`Fwd:`
+     prefixes stripped, non-alphanumerics collapsed to single hyphens, trimmed
+     to **40 chars** on a word boundary, then leading/trailing hyphens stripped.
+     **If the slug is empty *after* collapsing, use `no-subject`.** Keying the
+     fallback off the post-slug result (not the raw subject) is deliberate: a
+     subject that is pure punctuation, or entirely emoji or non-Latin script,
+     is not empty but collapses to nothing — and a bare `-` would produce a
+     leading-hyphen filename that every CLI tool parses as a flag (`grep *.md`
+     → `unknown --directories option`), including this vault's own
+     `linkrot-lint.sh`. Subjects are attacker-controlled: anyone can email you
+     any subject line, so this is input sanitization, not tidiness.
+   - `<shortid>` = first **12** chars of the thread ID, and **verify on write**.
+     12 hex chars makes an accidental clash vanishingly unlikely, but "unlikely"
+     is not "impossible" and the failure is silent data loss: two threads
+     sharing a first-message date, a subject-slug *and* an id prefix would
+     resolve to one filename, and the content-hash gate would treat the second
+     as a legitimate rewrite of the first — overwriting a file this kit calls
+     immutable, with no error and a verification gate that passes.
+     So before writing, if the target file exists and its frontmatter
+     `thread_id` is not this thread, **widen the shortid until it differs**;
+     never overwrite a file belonging to another thread.
 
    **Strip quoted reply chains and signatures.** The plaintext body re-embeds
    the entire preceding conversation in every message, so a 20-message thread
@@ -517,13 +555,29 @@ Follows the standard sync contract. Deltas from it:
    Frontmatter: `thread_id`, `subject`, `participants`, `message_count`,
    `first_message_date`, `last_message_date`, `label_ids`, `truncated`.
 
-9. **Truncation must not advance the watermark past what it dropped.**
-   `max_threads_per_sync` is a hard ceiling, and `search_threads` **documents no
-   ordering guarantee** — so on truncation you cannot assume the dropped threads
-   are the oldest. Set the watermark to the oldest message `date` among threads
-   actually *written*, and report the truncation. Advancing to MAX would strand
-   every dropped thread permanently below the watermark, where no later run
-   reaches it.
+9. **On truncation, narrow the window and re-run — never clamp the watermark.**
+   `max_threads_per_sync` is a *self-imposed cost ceiling*, not a connector
+   limit: `search_threads` paginates via `pageToken`. So when a run hits the
+   ceiling, halve the window, re-run each half, and recurse until every
+   sub-window comes back under the cap. Only then advance the watermark to MAX.
+
+   **Base case — mandatory, the recursion does not terminate without it.**
+   `after:`/`before:` are date-granular, so a window **cannot be halved below
+   one calendar day**: halving a 1-day window returns the same 1-day window and
+   recurses forever. So when a sub-window has narrowed to a single day and still
+   exceeds `max_threads_per_sync`, **stop halving**: page that day fully via
+   `pageToken`, ignoring the cost ceiling, and report it as an `overflow day` in
+   the sync report. The ceiling is a cost guard, not a correctness boundary —
+   blowing through it for one busy day is correct; looping forever is not.
+
+   **Why not clamp to the oldest thread written.** That presumes the truncated
+   result set is contiguous and ordered newest-first. `search_threads`
+   documents no `orderBy` and **no ordering guarantee**, so the threads that got
+   dropped may be *newer* than the clamp, not older — holes remain above it and
+   go permanently unfetched once the rolling window moves past them. An
+   unordered result set cannot be bounded by one of its own elements. Report the
+   recursion depth and the sub-windows walked, so a pathologically busy window
+   is visible rather than silently expensive.
 
 10. **Verification gate** (every `WRITTEN` file has mtime > `$START`), then
     watermark, then **report**: threads found / excluded-by-label /
