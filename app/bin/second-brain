@@ -1,18 +1,29 @@
 #!/bin/bash
-# Start the Second Brain app (if it isn't running) and open its window.
-#   SECOND_BRAIN_VAULT  path to your vault (default ~/cursor/obsidian)
-#   SECOND_BRAIN_PORT   port (default 19300)
+# second-brain — start/open the app, or run a command (setup, doctor, ...).
+#   second-brain            start the app if it is not running, open its window
+#   second-brain <command>  see `second-brain help`
 set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PORT="${SECOND_BRAIN_PORT:-19300}"
 STATE="${SECOND_BRAIN_STATE_DIR:-$HOME/.second-brain}"
-NODE="$(command -v node || echo /opt/homebrew/bin/node)"
+# node: PATH first, then the usual install places (a login shell may not have nvm).
+NODE="$(command -v node || true)"
+for n in /opt/homebrew/bin/node /usr/local/bin/node "$HOME/.volta/bin/node"; do [ -n "$NODE" ] && break; [ -x "$n" ] && NODE="$n"; done
+[ -n "$NODE" ] || { echo "second-brain: node not found. Install Node 18 or newer." >&2; exit 1; }
+
+if [ "${1:-open}" != "open" ]; then exec "$NODE" "$APP_DIR/cli.js" "$@"; fi
+
+[ -f "$STATE/settings.json" ] || [ -n "${SECOND_BRAIN_VAULT:-}" ] || { echo "Not set up yet. Run: $0 setup"; exit 1; }
+PORT="${SECOND_BRAIN_PORT:-$("$NODE" -e 'try{console.log(require(process.argv[1]).port||19300)}catch{console.log(19300)}' "$STATE/settings.json")}"
 mkdir -p "$STATE"
 if ! lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  BRIEFCASE_VAULT="${SECOND_BRAIN_VAULT:-$HOME/cursor/obsidian}" SECOND_BRAIN_PORT="$PORT" \
-    nohup "$NODE" "$APP_DIR/server.js" >>"$STATE/server.log" 2>&1 &
+  SECOND_BRAIN_PORT="$PORT" nohup "$NODE" "$APP_DIR/server.js" >>"$STATE/server.log" 2>&1 &
   for _ in $(seq 1 30); do lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1 && break; sleep 0.2; done
 fi
-# Its own window: a Chrome app window with its own profile, no tabs or URL bar.
-open -na "Google Chrome" --args --app="http://localhost:$PORT" --user-data-dir="$STATE/chrome"
+# Its own window: a Chrome app window with its own profile if Chrome is there,
+# else the default browser.
+if [ -d "/Applications/Google Chrome.app" ] || [ -d "$HOME/Applications/Google Chrome.app" ]; then
+  open -na "Google Chrome" --args --app="http://localhost:$PORT" --user-data-dir="$STATE/chrome"
+else
+  open "http://localhost:$PORT"
+fi
 echo "Second Brain on http://localhost:$PORT (log: $STATE/server.log)"

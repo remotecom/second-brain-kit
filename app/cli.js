@@ -1,0 +1,209 @@
+#!/usr/bin/env node
+// second-brain: the command line for the Second Brain app.
+//
+//   second-brain               start the app (if needed) and open its window
+//   second-brain setup         create a vault and start the app at login
+//   second-brain doctor        print what stops the bots, and the fixes
+//
+// setup options (each is asked for when missing and a terminal is attached):
+//   --vault <dir>       the vault folder (required; there is no default)
+//   --name <name>       your name, as people write it in Slack and docs
+//   --email <email>     your work email (default: the claude.ai login)
+//   --slack-user-id <U> your Slack member ID
+//   --timezone <zone>   default: this Mac's zone
+//   --port <n>          default 19300
+//   --no-login-item     do not install the LaunchAgent
+//   --yes               accept defaults, ask nothing
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const readline = require('readline');
+const { spawnSync } = require('child_process');
+
+const KIT_DIR = path.resolve(__dirname, '..');
+const install = require('./lib/install');
+
+const out = (s = '') => process.stdout.write(`${s}\n`);
+const fail = (s) => { process.stderr.write(`second-brain: ${s}\n`); process.exit(1); };
+
+function parseArgs(argv) {
+  const o = { _: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (!a.startsWith('--')) { o._.push(a); continue; }
+    const [k, v] = a.slice(2).split('=');
+    if (['yes', 'no-login-item', 'write'].includes(k)) o[k] = true;
+    else o[k] = v !== undefined ? v : argv[++i];
+  }
+  return o;
+}
+
+const tilde = (p) => (p ? path.resolve(String(p).replace(/^~(?=$|\/)/, os.homedir())) : p);
+const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const yq = (s) => JSON.stringify(String(s == null ? '' : s));
+
+async function ask(rl, q, def) {
+  if (!rl) return def;
+  return new Promise((resolve) => rl.question(def ? `${q} [${def}]: ` : `${q}: `, (a) => resolve(a.trim() || def || '')));
+}
+
+// --- prerequisites ---------------------------------------------------------------
+
+function prerequisites() {
+  const problems = [];
+  if (process.platform !== 'darwin') problems.push('Second Brain runs on macOS only (it uses launchd and the macOS pty).');
+  const major = Number(process.versions.node.split('.')[0]);
+  if (major < 18) problems.push(`Node ${process.versions.node} is too old; install Node 18 or newer.`);
+  const claude = install.findClaude();
+  let auth = null;
+  if (!claude) problems.push('Claude Code is not installed. Install it from https://claude.com/claude-code, log in, then run setup again.');
+  else {
+    auth = install.claudeAuth(claude);
+    if (!auth || !auth.loggedIn) problems.push('Claude Code is not logged in. Run `claude`, log in with your claude.ai account, then run setup again.');
+    else if (auth.authMethod && auth.authMethod !== 'claude.ai') problems.push(`Claude Code uses ${auth.authMethod}; the bots need a claude.ai login (they reach your sources through claude.ai connectors).`);
+  }
+  return { problems, claude, auth };
+}
+
+// --- vault -----------------------------------------------------------------------------
+
+// The starter config: the schema with this person's values filled in.
+function starterConfig({ name, email, slackUserId, timezone }) {
+  let t = fs.readFileSync(path.join(KIT_DIR, 'config.example.yaml'), 'utf8');
+  const set = (key, val) => { t = t.replace(new RegExp(`^(  ${key}: ).*$`, 'm'), `$1${yq(val)}`); };
+  set('name', name || 'Your Name');
+  set('email', email || 'you@example.com');
+  set('slack_user_id', slackUserId || 'U000XXXXX');
+  set('timezone', timezone);
+  // The calendar allowlist starts as the owner's own work calendar.
+  if (email) t = t.replace(/^(    calendars:\n      - )"you@example\.com"/m, `$1${yq(email)}`);
+  return t;
+}
+
+// The vault skeleton: templates/vault holds only folder READMEs, .gitkeep
+// files and the vault .gitignore. Only those kinds are copied, so a stray
+// file that lands in the kit folder (an old sync, a test) can never reach a
+// new vault. CLAUDE.md is rendered separately (lib/kit-block.js).
+const SKELETON_FILES = new Set(['README.md', '.gitkeep', '.gitignore']);
+function skeletonFiles(dir = path.join(KIT_DIR, 'templates', 'vault'), rel = '') {
+  const out = [];
+  for (const d of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+    const r = path.join(rel, d.name);
+    if (d.isDirectory()) out.push(...skeletonFiles(dir, r));
+    else if (d.isFile() && SKELETON_FILES.has(d.name)) out.push(r);
+  }
+  return out;
+}
+
+function createVault(vault, answers) {
+  const made = [];
+  fs.mkdirSync(vault, { recursive: true });
+  const tmpl = path.join(KIT_DIR, 'templates', 'vault');
+  for (const rel of skeletonFiles()) {
+    const to = path.join(vault, rel);
+    if (fs.existsSync(to)) continue;
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.copyFileSync(path.join(tmpl, rel), to, fs.constants.COPYFILE_EXCL);
+    if (!rel.endsWith('.gitkeep')) made.push(rel);
+  }
+  const doctor = require('./lib/doctor');
+  made.push(...doctor.repair(vault));
+  const cfg = path.join(vault, 'config.yaml');
+  if (!fs.existsSync(cfg)) { fs.writeFileSync(cfg, starterConfig(answers), { flag: 'wx' }); made.push('config.yaml'); }
+  const kb = require('./lib/kit-block').update(vault, { write: true });
+  if (kb.status === 'inserted' || kb.status === 'updated') made.push(`CLAUDE.md (kit block ${kb.status})`);
+  else if (kb.status === 'edited-inside') out(`  ! CLAUDE.md: ${kb.reason}. The kit block was not changed.`);
+  return made;
+}
+
+// --- login item ------------------------------------------------------------------------
+
+function launchAgentPlist({ vault, port, node, claude }) {
+  const paths = [path.dirname(node), claude ? path.dirname(claude) : null, path.join(os.homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
+  const v = {
+    LABEL: install.LABEL, NODE: node, SERVER: path.join(KIT_DIR, 'app', 'server.js'), APP_DIR: path.join(KIT_DIR, 'app'),
+    LOG: path.join(install.STATE_DIR, 'server.log'), PATH: [...new Set(paths.filter(Boolean))].join(':'),
+    VAULT: vault, PORT: String(port), HOME: os.homedir(),
+  };
+  return fs.readFileSync(path.join(KIT_DIR, 'launchd', 'second-brain.plist.tmpl'), 'utf8').replace(/\{\{([A-Z_]+)\}\}/g, (m, k) => (k in v ? xml(v[k]) : m));
+}
+
+function installLoginItem(plistText) {
+  const dir = path.join(os.homedir(), 'Library', 'LaunchAgents');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${install.LABEL}.plist`);
+  fs.writeFileSync(file, plistText);
+  if (process.env.SECOND_BRAIN_NO_LAUNCHCTL) return { file, loaded: false };
+  const uid = process.getuid();
+  for (const label of [install.LABEL, ...install.OLD_LABELS]) spawnSync('/bin/launchctl', ['bootout', `gui/${uid}/${label}`], { stdio: 'ignore' });
+  const r = spawnSync('/bin/launchctl', ['bootstrap', `gui/${uid}`, file], { encoding: 'utf8' });
+  return { file, loaded: r.status === 0, error: r.stderr };
+}
+
+// The real path of this node (nvm, Volta, Homebrew), so login still finds it.
+const nodePath = () => { try { return fs.realpathSync(process.execPath); } catch { return process.execPath; } };
+
+// --- commands ----------------------------------------------------------------------------
+
+async function setup(o) {
+  out('Second Brain setup\n');
+  const pre = prerequisites();
+  if (pre.problems.length) { pre.problems.forEach((p) => out(`  ✗ ${p}`)); fail('fix the items above, then run setup again.'); }
+  out(`  ✓ macOS, Node ${process.versions.node}, Claude Code logged in${pre.auth && pre.auth.email ? ` as ${pre.auth.email}` : ''}`);
+
+  const rl = !o.yes && process.stdin.isTTY ? readline.createInterface({ input: process.stdin, output: process.stdout }) : null;
+  try {
+    const current = install.resolveVault();
+    const vault = tilde(o.vault || await ask(rl, '\nVault folder (your private notes; created if missing)', current || path.join(os.homedir(), 'SecondBrain')));
+    if (!vault || (!o.vault && !rl && !current)) fail('pass --vault <dir> (there is no default vault).');
+    if (vault.startsWith(KIT_DIR + path.sep) || vault === KIT_DIR) fail('the vault must not be inside the kit folder (the kit is public code).');
+    const name = o.name || await ask(rl, 'Your name', (spawnSync('/usr/bin/id', ['-F'], { encoding: 'utf8' }).stdout || '').trim());
+    const email = o.email || await ask(rl, 'Your work email', pre.auth && pre.auth.email);
+    const slackUserId = o['slack-user-id'] || await ask(rl, 'Your Slack member ID (Slack profile → More → Copy member ID; blank = later)', '');
+    const timezone = o.timezone || require('./lib/config').localZone();
+    const port = Number(o.port || install.port());
+
+    out(`\nCreating the vault in ${vault}`);
+    const made = createVault(vault, { name, email, slackUserId, timezone });
+    made.forEach((m) => out(`  + ${m}`));
+    if (!made.length) out('  (everything was already there; nothing was changed)');
+
+    install.writeSettings({ vault, port, kit: KIT_DIR });
+    out(`  ✓ settings: ${install.SETTINGS}`);
+
+    if (!o['no-login-item']) {
+      const li = installLoginItem(launchAgentPlist({ vault, port, node: nodePath(), claude: pre.claude }));
+      out(`  ✓ login item: ${li.file}${li.loaded ? ' (started)' : process.env.SECOND_BRAIN_NO_LAUNCHCTL ? ' (not loaded: test mode)' : ` (NOT started: ${String(li.error || '').trim()})`}`);
+    }
+
+    const doctor = require('./lib/doctor');
+    const findings = doctor.check(vault, { claudeBin: pre.claude }).filter((f) => f.level !== 'info');
+    out('\nChecks:');
+    if (!findings.length) out('  ✓ nothing stops the bots');
+    for (const f of findings) out(`  ${f.level === 'error' ? '✗' : '!'} ${f.message}${f.fix ? `\n      ${f.fix}` : ''}`);
+    out(`\nNext: open http://localhost:${port} and finish the Setup page (connectors, scope, privacy, first run).`);
+  } finally { if (rl) rl.close(); }
+}
+
+function doctorCmd() {
+  const vault = install.resolveVault();
+  if (!vault) fail('not set up: run `second-brain setup`.');
+  const findings = require('./lib/doctor').check(vault, { claudeBin: install.findClaude() }).filter((f) => f.level !== 'info');
+  if (!findings.length) { out('Nothing stops the bots.'); return; }
+  for (const f of findings) out(`${f.level.toUpperCase().padEnd(5)} ${f.message}${f.fix ? `\n      ${f.fix}` : ''}`);
+  if (findings.some((f) => f.level === 'error')) process.exitCode = 1;
+}
+
+async function main() {
+  const o = parseArgs(process.argv.slice(2));
+  const cmd = o._[0] || 'open';
+  if (cmd === 'setup') return setup(o);
+  if (cmd === 'doctor') return doctorCmd();
+  if (cmd === 'help' || cmd === '--help') { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 18).map((l) => l.replace(/^\/\/ ?/, '')).join('\n')); return; }
+  fail(`unknown command "${cmd}". Try: second-brain help`);
+}
+
+if (require.main === module) main().catch((e) => fail(e.message));
+
+module.exports = { parseArgs, starterConfig, createVault, launchAgentPlist, prerequisites, skeletonFiles };

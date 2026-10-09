@@ -15,15 +15,15 @@
 
 const http = require('http');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { execFileSync } = require('child_process');
 
-const PORT = Number(process.env.SECOND_BRAIN_PORT || 19300);
-const STATE_DIR = process.env.SECOND_BRAIN_STATE_DIR || path.join(os.homedir(), '.second-brain');
-process.env.BRIEFCASE_STATE_DIR = STATE_DIR; // lib/brain.js reads this name
-const brain = require('./lib/brain');
+const install = require('./lib/install');
+const PORT = install.port();
+const STATE_DIR = install.STATE_DIR;
+const VAULT = install.resolveVault();
+// Without a vault the bots have nothing to work on; the page says how to set up.
+const brain = VAULT ? require('./lib/brain') : null;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -36,15 +36,14 @@ try {
   TOKEN = crypto.randomBytes(24).toString('hex');
   fs.writeFileSync(TOKEN_FILE, TOKEN, { mode: 0o600 });
 }
+const NOT_SET_UP = `<!doctype html><meta charset="utf-8"><title>Second Brain</title>
+<body style="font:15px -apple-system,system-ui;background:#1e1e1e;color:#e4e4e4;padding:40px;max-width:640px">
+<h1>Second Brain is not set up yet</h1><p>Open Terminal and run:</p>
+<pre style="background:#111;padding:12px;border-radius:6px">${path.join(__dirname, 'bin', 'second-brain')} setup</pre>
+<p>Setup creates your vault, writes its settings and starts the app at login.</p></body>`;
 const ALLOWED = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`]);
 
-function findClaude() {
-  for (const p of [path.join(os.homedir(), '.local', 'bin', 'claude'), '/opt/homebrew/bin/claude', '/usr/local/bin/claude']) {
-    if (fs.existsSync(p)) return p;
-  }
-  try { return execFileSync('/usr/bin/which', ['claude'], { encoding: 'utf8' }).trim() || null; } catch { return null; }
-}
-const CLAUDE = findClaude();
+const CLAUDE = install.findClaude();
 
 const json = (res, code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
 const readBody = (req) => new Promise((resolve) => {
@@ -60,7 +59,9 @@ const server = http.createServer(async (req, res) => {
   if (origin && !ALLOWED.has(origin)) { res.writeHead(403); return res.end('cross-origin request refused'); }
   if (url.pathname.startsWith('/api/') && (req.headers['x-brain-token'] || '') !== TOKEN) { res.writeHead(401); return res.end('missing or bad token'); }
   try {
-    if (await brain.handle(req, res, url, { json, readBody, claudeBin: CLAUDE })) return;
+    if (!brain && url.pathname.startsWith('/api/')) return json(res, 503, { error: 'not set up', fix: 'Run `second-brain setup` in Terminal.' });
+    if (brain && await brain.handle(req, res, url, { json, readBody, claudeBin: CLAUDE })) return;
+    if (!brain) { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(NOT_SET_UP); }
     const rel = url.pathname === '/' ? 'index.html' : path.normalize(url.pathname).replace(/^[/\\]+/, '');
     const full = path.join(PUBLIC_DIR, rel);
     if (!full.startsWith(PUBLIC_DIR) || !fs.existsSync(full)) { res.writeHead(404); return res.end('not found'); }
@@ -78,6 +79,6 @@ server.on('error', (e) => {
   throw e;
 });
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`Second Brain on http://localhost:${PORT}  (vault=${brain.VAULT}, claude=${CLAUDE || 'MISSING'})`);
-  brain.start(CLAUDE);
+  console.log(`Second Brain on http://localhost:${PORT}  (vault=${VAULT || 'NOT SET UP'}, claude=${CLAUDE || 'MISSING'})`);
+  if (brain) brain.start(CLAUDE);
 });

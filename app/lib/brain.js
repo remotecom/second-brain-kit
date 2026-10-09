@@ -49,6 +49,7 @@ const { script } = require('./kit');
 const { tool, SETTINGS_URL } = require('./connectors');
 const { pressButtons, connectorVerdict } = require('./buttons');
 const doctor = require('./doctor');
+const { resolveVault, STATE_DIR: INSTALL_STATE_DIR } = require('./install');
 
 // The doctor's findings, cached briefly (the board polls every few seconds).
 let CLAUDE_BIN = null;
@@ -68,8 +69,9 @@ function gated(run, botId) {
 const { dayOf } = require('./time');
 const BUTTON_SYNCS = { slack: syncSlackMcp, linear: syncLinearMcp, notion: syncNotionMcp, gcal: syncGcalMcp, gdrive: syncGdriveMcp };
 
-const VAULT = process.env.BRIEFCASE_VAULT || path.join(os.homedir(), 'cursor', 'obsidian');
-const STATE_DIR = process.env.BRIEFCASE_STATE_DIR || path.join(os.homedir(), '.second-brain');
+// No default vault: `second-brain setup` records it (lib/install.js).
+const VAULT = resolveVault();
+const STATE_DIR = INSTALL_STATE_DIR;
 const CHAT_CWD = path.join(STATE_DIR, 'brain-cwd');
 const RUNS_DIR = path.join(VAULT, '.bot', 'runs');
 

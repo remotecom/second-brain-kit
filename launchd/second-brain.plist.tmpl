@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Written by `second-brain setup`. Starts the Second Brain app at login and
+     restarts it if it stops. Re-run setup after moving or upgrading node. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{{LABEL}}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{NODE}}</string>
+    <string>{{SERVER}}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{APP_DIR}}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>{{LOG}}</string>
+  <key>StandardErrorPath</key>
+  <string>{{LOG}}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{{PATH}}</string>
+    <key>SECOND_BRAIN_VAULT</key>
+    <string>{{VAULT}}</string>
+    <key>SECOND_BRAIN_PORT</key>
+    <string>{{PORT}}</string>
+    <key>HOME</key>
+    <string>{{HOME}}</string>
+  </dict>
+</dict>
+</plist>

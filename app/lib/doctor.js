@@ -49,6 +49,15 @@ function claudeFacts(bin) {
   return facts;
 }
 
+const authCache = new Map(); // bin -> { at, facts }; login can change, so 10 min
+function authFacts(bin) {
+  const hit = authCache.get(bin);
+  if (hit && Date.now() - hit.at < 600000) return hit.facts;
+  const facts = require('./install').claudeAuth(bin);
+  authCache.set(bin, { at: Date.now(), facts });
+  return facts;
+}
+
 let ptyCache = null;
 // /usr/bin/python3 is a shim on every Mac; without the developer tools it
 // opens Apple's install dialog. So check for the tools first and never trigger
@@ -112,6 +121,9 @@ function check(vault, { claudeBin } = {}) {
     if (!f) add('error', 'claude', `claude at ${claudeBin} cannot be read.`, 'Reinstall Claude Code, then restart the app.');
     else {
       if (f.missingFlags.length) add('error', 'claude:flags', `This claude (${f.version || 'unknown version'}) has no ${f.missingFlags.join(', ')} flag(s) the bots need.`, 'Update Claude Code (claude update), then restart the app.');
+      const auth = authFacts(claudeBin);
+      if (auth && !auth.loggedIn) add('error', 'claude:login', 'Claude Code is not logged in.', 'Run `claude` in Terminal and log in with your claude.ai account, then restart the app.');
+      else if (auth && auth.authMethod && auth.authMethod !== 'claude.ai') add('error', 'claude:login', `Claude Code is logged in with ${auth.authMethod}, not a claude.ai account. The bots reach your sources through claude.ai connectors.`, 'Run `claude auth login` and choose your claude.ai account.');
       if (f.version && !KNOWN_GOOD.includes(f.version)) add('warn', 'claude:version', `Claude Code ${f.version} is not on the kit's tested list (${KNOWN_GOOD.join(', ')}).`, 'It usually works. If a bot fails oddly, tell the kit maintainer the version.', []);
     }
   }

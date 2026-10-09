@@ -1,0 +1,72 @@
+# ============================================================================
+# LEAK PREVENTION — the whole point of this file.
+# The kit is MACHINERY. Your synced data and synthesized wiki are PRIVATE.
+# By default we ignore every raw layer AND the wiki so proprietary content
+# (partner names, deal figures, internal Slack/Linear/Notion) can never be
+# committed to a repo that started as this public template.
+#
+# If you want to version-control YOUR OWN vault, do it in a SEPARATE PRIVATE
+# repo — do not push your data back to the kit template. See SETUP.md.
+# ============================================================================
+
+# Raw layers (synced content — always private)
+projects/*
+slack/*
+linear/issues/*
+linear/projects/*
+linear/initiatives/*
+linear/docs/*
+notion/pages/*
+notion/databases/*
+gdrive/files/*
+gmail/threads/*
+gcal/*
+
+# Your filled-in config (holds your Slack/Notion IDs, team key) — private.
+# Only config.example.yaml is tracked; your config.yaml never commits.
+config.yaml
+
+# Watermarks and per-source state.
+# ANCHORED to the real source dirs on purpose. These were `**/.last-sync` /
+# `**/.last-ingest`, which match at ANY depth and would silently swallow the
+# test fixture vault's watermarks under tests/ — making the fixture
+# uncommittable and the tests unreproducible.
+/slack/.last-sync
+/linear/.last-sync
+/notion/.last-sync
+/gdrive/.last-sync
+/gmail/.last-sync
+/gcal/.last-sync
+/wiki/.last-ingest
+
+# Per-source allowlists, caches, and pre-fetch skip state. Each needs its OWN
+# line — these are not covered by the raw-layer globs above. Commit d4eba8f
+# fixed exactly this class of leak once already (config.yaml).
+notion/.allowlist
+notion/.user-id
+gdrive/.allowlist
+/slack/.state.json
+/linear/.state.json
+/notion/.state.json
+/gdrive/.state.json
+/gmail/.state.json
+/gcal/.state.json
+
+# Synthesized wiki (your synthesis of private data — private by default).
+# ALL of wiki/ is ignored except structure + READMEs. Your principles pages
+# can carry partner examples too, so they are private by default.
+wiki/*/*
+wiki/index.md
+wiki/log.md
+
+# ...but KEEP the structure, the READMEs, and the .gitkeep placeholders.
+# (The kit's SHIPPED templates live in templates/, which is always tracked.)
+!**/README.md
+!.gitkeep
+!**/.gitkeep
+
+# Local tooling / OS noise
+.DS_Store
+.obsidian/workspace*
+scratch/
+*.tmp
