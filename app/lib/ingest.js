@@ -29,6 +29,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { specSection, rulesSection, claudeStream, shortInput } = require('./sync');
 const { readOwner, readIngestExcludes } = require('./config');
+const { script } = require('./kit');
 const { route, groupParts } = require('./route');
 const { linearTiers } = require('./tiers');
 const { addToIndex } = require('./wiki-index');
@@ -47,7 +48,7 @@ function wikiConventions(vault) {
 
 function deltaWalk(vault) {
   return new Promise((resolve) => {
-    const child = spawn('/bin/bash', [path.join(vault, 'docs', 'audits', 'delta-walk.sh'), '--list'], { cwd: vault, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('/bin/bash', [script('delta-walk.sh'), '--vault', vault, '--list'], { cwd: vault, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.on('data', (c) => { out += c; });
     child.on('close', (code) => {

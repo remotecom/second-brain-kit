@@ -1,60 +1,33 @@
 #!/usr/bin/env bash
-# refresh-project-symlinks.sh — keep projects/* symlinks aligned with live
-# Claude Code memory dirs. Run from the vault root BEFORE each ingest.
+# DEPRECATED 2026-08-03 — superseded by bind-project-memory.sh
 #
-#   bash scripts/refresh-project-symlinks.sh        # create missing, report dangling (default)
-#   bash scripts/refresh-project-symlinks.sh --prune # ALSO remove dangling symlinks (destructive)
+# This script assumed the OLD link direction: projects/<slug> as a symlink
+# pointing OUT of the vault at ~/.claude/projects/<encoded-cwd>/memory. That
+# layout is invisible to any runtime sandboxed to the vault directory (Claude
+# Cowork, container mounts), which made `find -L projects` return 0 and ingest
+# silently report projects/=0.
 #
-# Rationale: memory lives inside ephemeral transcript dirs
-# (~/.claude/projects/<encoded-cwd>/memory). When a repo is opened from a new
-# working dir the encoded name changes, so new memories land unwatched and old
-# symlinks dangle silently. This re-aligns them. See
-# reference-memory-retention-and-vault-symlinks memory + the linkrot audit.
+# The direction is now inverted: projects/<slug> is the canonical REAL dir
+# inside the vault, and ~/.claude/.../memory is a symlink pointing at it.
+#
+# Running the old logic against the new layout is DESTRUCTIVE: its `ln -sfn`
+# would target a non-empty real directory and create a nested symlink inside
+# your memory store. Hence this stub rather than a deletion — anything (a
+# stale doc, an old habit, a wiki page) that still invokes this path gets a
+# loud redirect instead of a corrupted raw layer.
 set -euo pipefail
-cd "$(dirname "$0")/.."   # vault root
-PRUNE=${1:-}
 
-CLAUDE_PROJECTS="$HOME/.claude/projects"
-# encoded prefix for repos under ~/cursor. Claude Code encodes the cwd by
-# replacing every non-alphanumeric char (/, ., etc.) with '-'.
-ENC=$(printf '%s' "$HOME/cursor" | sed 's#[^A-Za-z0-9]#-#g')
+cat <<'EOF'
+refresh-project-symlinks.sh is DEPRECATED and does nothing.
 
-echo "# project-symlink refresh — $(date -u '+%Y-%m-%d %H:%M UTC')"
+The project-memory link direction was inverted on 2026-08-03 so that dir-scoped
+runtimes (Claude Cowork) can see the raw layer. Use:
 
-echo ""
-echo "## Live memory dirs -> vault symlink"
-for memdir in "$CLAUDE_PROJECTS/${ENC}"-*/memory; do
-  [ -d "$memdir" ] || continue
-  [ "$(find "$memdir" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')" -gt 0 ] || continue
-  encdir=$(basename "$(dirname "$memdir")")     # -Users-...-cursor-<friendly>
-  friendly=${encdir#${ENC}-}                     # <friendly>
-  link="projects/$friendly"
-  if [ -L "$link" ] && [ "$(readlink "$link")" = "$memdir" ]; then
-    echo "  ok      $link"
-  elif [ -e "$link" ] || [ -L "$link" ]; then
-    echo "  RELINK  $link  (was -> $(readlink "$link" 2>/dev/null))"
-    ln -sfn "$memdir" "$link"
-  else
-    echo "  ADDED   $link -> $memdir  ($(find "$memdir" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ') memories)"
-    ln -sfn "$memdir" "$link"
-  fi
-done
+    bash scripts/bind-project-memory.sh            # dry run — show the plan
+    bash scripts/bind-project-memory.sh --apply    # perform it
 
-echo ""
-echo "## Dangling vault symlinks (target gone — memories purged or repo path changed)"
-found_dangle=0
-for l in projects/*; do
-  [ -L "$l" ] || continue
-  if [ ! -e "$l" ]; then
-    found_dangle=1
-    if [ "$PRUNE" = "--prune" ]; then
-      rm "$l"; echo "  PRUNED  $l"
-    else
-      echo "  DANGLING $l -> $(readlink "$l")   (rerun with --prune to remove)"
-    fi
-  fi
-done
-if [ "$found_dangle" = 0 ]; then echo "  (none)"; fi
-
-echo ""
-echo "Done. Run 'bash scripts/linkrot-lint.sh' for the full link-integrity report."
+That script is idempotent, backs up to ~/.claude/memory-backups/<stamp>/ before
+touching anything, and ends with the verification gate the ingest preflight
+depends on. See CLAUDE.md § Layout and § Ingest step 2.
+EOF
+exit 64  # EX_USAGE — fail loudly so a scripted caller doesn't sail past this

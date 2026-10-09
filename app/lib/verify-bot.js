@@ -19,6 +19,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { claudeStream } = require('./sync');
 const { addToIndex } = require('./wiki-index');
+const { script } = require('./kit');
 const { entriesOf, entryKey, splitFrontmatter, fmField } = require('./ingest');
 
 const SPOT_N = 10;
@@ -38,9 +39,9 @@ function walk(dir, out = []) {
   return out;
 }
 
-function bash(script, cwd) {
+function bash(file, cwd, args = []) {
   return new Promise((resolve) => {
-    const c = spawn('/bin/bash', [script], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const c = spawn('/bin/bash', [file, ...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = ''; c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { out += d; });
     c.on('close', (code) => resolve({ code, out }));
   });
@@ -222,7 +223,7 @@ async function runVerify(run, ctx) {
   const findings = [];
 
   // 1. Lint (dead links, raw purity, annotations in raw).
-  const lint = await bash(path.join(vault, 'docs', 'audits', 'linkrot-lint.sh'), vault);
+  const lint = await bash(script('linkrot-lint.sh'), vault, ['--vault', vault]);
   const lintRes = ctx.summarizeLint(lint.out, lint.code);
   log(`lint: ${lintRes.summary}`);
   if (lintRes.status === 'error') findings.push(`lint: ${lintRes.summary}`);
@@ -246,15 +247,14 @@ async function runVerify(run, ctx) {
 
   // 3b. Workspace memory stores. Claude Code writes memories straight into the
   // vault, so there is no sync to run; the risk is a store that is NOT bound
-  // (a new repo whose memories live only in ~/.claude, as switchboard did until
-  // 07-21) and is never ingested. The dry run reads only.
-  const bind = await bash(path.join(vault, 'docs', 'audits', 'bind-project-memory.sh'), vault);
+  // (a new repo whose memories live only in ~/.claude) and is never ingested. The dry run reads only.
+  const bind = await bash(script('bind-project-memory.sh'), vault, ['--vault', vault]);
   const reach = Number((bind.out.match(/raw memories reachable from vault root: (\d+)/) || [])[1] || 0);
   const drift = bind.out.split('\n').filter((l) => /^\s*(MIGRATE|ADOPT|MERGE|BIND|FAIL)\b/.test(l)).map((l) => l.trim());
   const clean = bind.code === 0 && /STATUS: dry run clean/.test(bind.out) && !drift.length;
   log(`memory stores: ${reach} memories reachable · ${clean ? 'all bound' : `${drift.length || 'unknown'} store(s) need binding`}`);
   for (const d of drift.slice(0, 8)) log(`  ${d}`);
-  if (!clean) findings.push(`memory stores: ${drift.length ? drift.length : 'bind check failed'}; run docs/audits/bind-project-memory.sh --apply`);
+  if (!clean) findings.push(`memory stores: ${drift.length ? drift.length : 'bind check failed'}; run ${script('bind-project-memory.sh')} --vault ${vault} --apply`);
 
   // 4. Contradictions into Needs-You.md.
   const needsPath = path.join(vault, 'Needs-You.md');

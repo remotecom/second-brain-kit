@@ -56,9 +56,9 @@ sect "2. scripts/linkrot-lint.sh actually executes"
 # the vault root, exited 1, and printed a clean-LOOKING partial report.
 lint_out=$(bash scripts/linkrot-lint.sh 2>&1); lint_rc=$?
 is  "linkrot-lint.sh exits 0"                   "0" "$lint_rc"
-is  "linkrot-lint.sh emits all 6 sections"      "6" "$(printf '%s' "$lint_out" | grep -c '^## ')"
+is  "linkrot-lint.sh emits all 7 sections"      "7" "$(printf '%s' "$lint_out" | grep -c '^## ')"
 has "…including section 2 (first one that used to be skipped)" "$lint_out" "## 2."
-has "…and section 5 (last one)"                 "$lint_out" "## 5."
+has "…and section 6 (last one)"                 "$lint_out" "## 6."
 
 # ===========================================================================
 sect "3. linkrot-lint.sh detects the NEW raw classes"
@@ -247,6 +247,33 @@ done
 for f in tests/fixture/slack/.last-sync tests/fixture/wiki/.last-ingest; do
   if git check-ignore -q "$f"; then bad "fixture $f survives gitignore" "trackable" "IGNORED"; else ok "fixture path $f is trackable"; fi
 done
+
+# ===========================================================================
+sect "5b. Contract: the app finds every delta file in a vault OUTSIDE the kit"
+# ===========================================================================
+# The scripts live in the kit and take --vault. The app reads the file list
+# after the "--- delta files ---" marker; a missing marker made ingest see 0
+# files and report "not due" forever (the 2026-10-05 portability audit).
+CV=$(mktemp -d)
+mkdir -p "$CV/wiki" "$CV/slack" "$CV/projects/demo"
+printf -- '---\ndate: 2026-01-02\n---\n' > "$CV/slack/2026-01-02.md"
+printf -- 'a memory\n' > "$CV/projects/demo/note.md"
+cv_out=$(bash scripts/delta-walk.sh --vault "$CV" --list 2>/dev/null)
+has "delta-walk --vault prints the file-list marker" "$cv_out" "--- delta files ---"
+has "…and lists a raw file of that vault"             "$cv_out" "slack/2026-01-02.md"
+cv_cwd=$(cd "$CV" && bash "$VAULT_ROOT/scripts/delta-walk.sh" 2>/dev/null | grep -c '^Deltas walked:')
+is  "with no --vault, the current directory is the vault" "1" "$cv_cwd"
+nv_out=$(cd "$TD" && bash "$VAULT_ROOT/scripts/delta-walk.sh" 2>&1); nv_rc=$?
+is  "a folder with no wiki/ is refused (rc 2)" "2" "$nv_rc"
+has "…with a message that says how to fix it" "$nv_out" "Pass --vault"
+NODE=$(command -v node || ls /opt/homebrew/bin/node /usr/local/bin/node 2>/dev/null | head -1)
+if [ -n "$NODE" ]; then
+  n_files=$("$NODE" -e "require('./app/lib/ingest').deltaWalk(process.argv[1]).then((r) => console.log(r.files.length))" "$CV")
+  is "the app's deltaWalk() picks up both files" "2" "$n_files"
+else
+  printf '  skip deltaWalk() contract (node not found)\n'
+fi
+rm -rf "$CV"
 
 # ===========================================================================
 sect "6. Name check (no private names in anything that would be committed)"
