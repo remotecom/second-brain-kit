@@ -754,6 +754,17 @@ the watermark write and the log header — don't type a guessed timestamp.
    `projects`). At 4 classes "≥2" was a real bar; at 7 it is trivially met, and
    a page built only from Drive metadata and calendar invites is not synthesis.
    If only one class is possible, write it anyway and flag `[source-balance]`.
+   **Calendar recurrence collapsing is ingest's job, not sync's.** `gcal/`
+   records every instance of a recurring series verbatim. Collapse them here,
+   on a **mechanical** rule: an instance whose title, attendee set and
+   description all match the prior instance folds into one wiki mention with a
+   date range. Never push this judgment back into the sync by annotating raw.
+   **Attendee lists are the people graph.** `gcal/` is the only source that
+   shows who was really in the room. Use `responseStatus: accepted` attendees to
+   promote and cross-link `wiki/people/` pages, and to meet the internal
+   engagement threshold (a thread with the owner **or** a meeting with the
+   owner). Read `notion/.allowlist` and `gdrive/.allowlist` to see which content
+   is watched on purpose.
 4. **Append one entry to `wiki/log.md`:**
 
    ```
@@ -816,17 +827,50 @@ When you say **"lint"**, report (don't auto-fix without approval):
 ## Rules
 
 - **NEVER edit files under `projects/`, `slack/`, `linear/`, `notion/`,
-  `gdrive/`, `gmail/`, or `gcal/`.** Only `wiki/` is mutable. Raw is raw.
-  This includes *annotating* raw — do not stamp `wiki_ingest: false` onto a raw
-  file to steer synthesis. Filtering is ingest's job; raw records what happened.
+  `gdrive/`, `gmail/`, or `gcal/`.** All seven are RAW and immutable. Only
+  `wiki/` is mutable. This includes *annotating* raw: never stamp
+  `wiki_ingest: false` onto a raw file to steer synthesis. Filtering is
+  ingest's job; raw records what happened. Two narrow exceptions, both
+  write-new-only:
+  - A `sync` op rewrites its own raw class from source: RAW CONTENT ONLY,
+    never wiki synthesis (see RAW PURITY).
+  - The `capture` op creates **new** files under `projects/cowork/` (plus its
+    `MEMORY.md` index). It never edits an existing raw file.
+- **Never hand-move or hand-relink anything under `projects/`.** The
+  vault-canonical direction is load-bearing for sandboxed runtimes;
+  `bind-project-memory.sh` owns it.
+- **RAW PURITY: no wiki backlinks in raw.** Never write `## Related`,
+  `## Sources`, or `[[wiki/...]]` links into a raw file. A link the source
+  itself contains (a calendar event's own Drive attachment) is
+  *representation* and is fine; one the source lacks is *synthesis* and belongs
+  in `wiki/`.
+- **NO ANNOTATIONS IN RAW.** Every character in a raw file is (a) verbatim
+  source content, (b) a structural element (frontmatter, heading, timestamp,
+  channel, author, permalink), or (c) a declared placeholder like
+  `_No messages._`. Forbidden: `_(italic glosses)_` explaining a message;
+  `_(see Mentions)_`-style cross-references standing in for content; and any
+  reply count or summary in place of the replies. **Relevance is never the
+  sync's call**: "only cc'd", "tangential" are ingest's judgments, and ingest
+  cannot make them from content that was never written down. Lint check 9
+  (section 6 of `linkrot-lint.sh`) detects this.
 - **Preserve existing `sources:` entries** on updates; append, don't replace.
-- **Wiki frontmatter uses `type: wiki`** — never a memory type.
-- **Use the locked tag vocabulary.** Don't invent namespaces.
-- **Sync/ingest/lint specs are literal** — no editorial discretion, no "minimal
-  touch", no condensing of raw content. If you can't follow the spec, stop and
-  report; don't silently shortcut. Editorial compression by a sync agent is a
-  hand-edit by another name.
-- **Wiki pages will occasionally disagree with raw.** Feature, not bug — lint
-  surfaces it, you decide. Never silently edit raw to match the wiki.
-- **Outbound comms go through the review gate** (`config.yaml` → `outbound_gate`;
-  rules in `wiki/principles/outbound-voice.md`). Never post directly.
+- **Wiki frontmatter uses `type: wiki`**, never a memory type
+  (`feedback|project|user|reference`), or wiki pages leak into memory views.
+- **Sync/ingest/lint specs are literal**: no editorial discretion, no
+  "minimal touch", no condensing of raw content. A sync may apply a *declared*
+  cap (`max_description_chars`, `max_body_chars`); it may never decide per item
+  that something is boilerplate. If you can't follow the spec, stop and report;
+  don't silently shortcut.
+- **Wiki prose is about 80% ASD-STE100 Simplified Technical English**: short
+  sentences, common words with one meaning each, one term per thing, active
+  voice. This applies to ingest, restructure, brief and verify output alike.
+  Raw is never rewritten to match it.
+- **Use the locked tag vocabulary** (`{{TAG_NAMESPACES}}`). Don't invent
+  namespaces; expand one only when a memory truly fits none.
+- **Log format matters:** `## [YYYY-MM-DD HH:MM] ingest | <summary>`. The next
+  ingest reads it; drift breaks the diff.
+- **Wiki pages will occasionally disagree with raw.** Feature, not bug: lint
+  surfaces it, the owner decides. Never silently edit raw to match the wiki.
+- **Outbound comms go through the review gate** (`config.yaml` →
+  `outbound_gate`; rules in `wiki/principles/outbound-voice.md`). Never post
+  directly.
