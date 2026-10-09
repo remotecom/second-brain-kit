@@ -23,6 +23,7 @@
 
   let vaultName = 'obsidian';
   let bots = [];
+  let setup = [];
   let sched = {};
   let sel = store.get('brain.sel', 'today');
   let open = store.get('brain.open', { 'g-daily': true, 'g-syncs': false, 'g-wiki': true, 'g-checks': false });
@@ -77,6 +78,7 @@
     vaultName = (r.vault || '').split('/').pop() || vaultName;
     bots = r.bots || [];
     sched = r.schedule || {};
+    setup = r.setup || [];
     try { const f = await api('/api/brain/file?path=Brief.md'); briefText = f.text || ''; } catch {}
     try { needs = (await api('/api/brain/needs')).items || []; } catch {}
     const known = new Set(GROUPS.flatMap((g) => g.bots));
@@ -133,15 +135,26 @@
     if (doc2 && keep) doc2.scrollTop = keep;
   }
 
+  // What the doctor found. Errors stop the bots they name; warnings do not.
+  function setupCard() {
+    const errs = setup.filter((f) => f.level === 'error'), warns = setup.filter((f) => f.level === 'warn');
+    if (!errs.length && !warns.length) return '';
+    const line = (f) => `<div class="t">${esc(f.message)}</div>${f.fix ? `<div class="n">${esc(f.fix)}</div>` : ''}`;
+    const fixable = errs.some((f) => f.repair);
+    return `<div class="card ${errs.length ? 'move' : ''}"><div class="k">${errs.length ? `Setup issues · ${errs.length} stop a bot` : 'Setup notes'}</div>
+      ${errs.map(line).join('')}${warns.length ? `<details${errs.length ? '' : ' open'}><summary class="n">${warns.length} note(s) that do not stop anything</summary>${warns.map(line).join('')}</details>` : ''}
+      ${fixable ? '<div class="row"><button class="small" data-act="repair" data-confirm="Create the missing folders and starter files? Nothing that exists is changed.">Repair</button></div>' : ''}</div>`;
+  }
+
   function todayPage() {
     const list = todos();
     const m = byId('morning');
     const ml = m && m.last;
     const head = `<h1>Today</h1><div class="sub">${ml ? `Last Morning run ${ago(ml.endedAt || ml.startedAt)} · <span class="pill ${status(m)}">${status(m)}</span>${ml.costUsd ? ` · $${ml.costUsd.toFixed(2)}` : ''}` : 'The Morning run has not run yet.'}</div>`;
-    const moves = list.length ? list.map(({ bot, todo }) => moveCard(bot, todo, true)).join('') : '<div class="empty">Nothing is waiting on you.</div>';
+    const moves = list.length ? list.map(({ bot, todo }) => moveCard(bot, todo, true)).join('') : (setup.some((f) => f.level === 'error') ? '' : '<div class="empty">Nothing is waiting on you.</div>');
     const brief = briefText ? `<div class="card brief"><div class="k" style="color:var(--muted)">Today's brief</div><div class="doc">${render(briefText.replace(/^---[\s\S]*?---\n/, ''))}</div>
       <div class="row"><a href="${obsidian('Brief.md')}"><button class="ghost small">Open in Obsidian</button></a></div></div>` : '';
-    return head + moves + brief;
+    return head + setupCard() + moves + brief;
   }
 
   function groupPage(g) {
@@ -286,6 +299,13 @@
     if (a && a.dataset.act === 'goto') return select(a.dataset.slug);
     // Only https links to claude.ai open from a card (the connector settings).
     if (a && a.dataset.act === 'open-url') { if (/^https:\/\/claude\.ai\//.test(a.dataset.url)) window.open(a.dataset.url, '_blank', 'noopener'); return; }
+    if (a && a.dataset.act === 'repair') {
+      if (a.dataset.confirm && !confirm(a.dataset.confirm)) return;
+      a.disabled = true;
+      const res = await api('/api/brain/doctor/repair', { method: 'POST', body: '{}' });
+      if (res.error) alert(res.error); else alert(res.made && res.made.length ? `Created: ${res.made.join(', ')}` : 'Nothing was missing.');
+      return load();
+    }
     if (a && a.dataset.act === 'run') {
       a.disabled = true;
       const res = await api(`/api/brain/bots/${encodeURIComponent(a.dataset.slug)}/run`, { method: 'POST', body: '{}' });

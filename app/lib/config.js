@@ -164,7 +164,7 @@ function validate(vault) {
   const c = getConfig(vault);
   const known = new Set([...Object.keys(defaults()), 'gcal', 'gdrive']);
   for (const k of Object.keys(raw.data)) if (!known.has(k)) add('warn', k, `unknown key "${k}" (a typo?). The app ignores it.`);
-  if (Number(raw.data.config_version || 1) < CONFIG_VERSION) add('warn', 'config_version', 'config.yaml uses the old layout. `second-brain update` converts it.');
+  if (Number(raw.data.config_version || 1) < CONFIG_VERSION) add('warn', 'config_version', 'config.yaml uses the old (version 1) layout. Everything still works.');
 
   if (placeholder(c.owner.name)) add('error', 'owner.name', 'set owner.name');
   if (!validZone(c.owner.timezone)) add('error', 'owner.timezone', `owner.timezone "${c.owner.timezone}" is not a time zone (use a name like America/New_York)`);
@@ -179,7 +179,7 @@ function validate(vault) {
   if (src.linear.enabled) {
     const sc = src.linear.scope || {};
     const n = [sc.initiative, sc.team].filter(Boolean).length;
-    if (n !== 1) add(n ? 'error' : 'warn', 'sources.linear.scope', n ? 'set ONE of sources.linear.scope.initiative or .team, not both' : 'set sources.linear.scope.initiative or .team (the scope cache is used until then)');
+    if (n !== 1) add(n ? 'error' : 'warn', 'sources.linear.scope', n ? 'Set ONE of sources.linear.scope.initiative or .team, not both.' : 'Linear scope is not in config.yaml yet. The saved scope (linear/.initiative-scope.json) is used.');
   }
   for (const [k, v] of Object.entries(c.connectors || {})) {
     if (!/^mcp__[A-Za-z0-9_-]+$/.test(String(v || ''))) add('error', `connectors.${k}`, `connectors.${k} must look like mcp__claude_ai_Name (the part before the double underscore)`);

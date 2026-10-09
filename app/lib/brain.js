@@ -48,6 +48,23 @@ const { botArgs, botEnv } = require('./claude-call');
 const { script } = require('./kit');
 const { tool, SETTINGS_URL } = require('./connectors');
 const { pressButtons, connectorVerdict } = require('./buttons');
+const doctor = require('./doctor');
+
+// The doctor's findings, cached briefly (the board polls every few seconds).
+let CLAUDE_BIN = null;
+let morningBlockedOn = null;
+let doctorCache = { at: 0, findings: [] };
+function doctorNow(force = false) {
+  if (force || Date.now() - doctorCache.at > 15000) doctorCache = { at: Date.now(), findings: doctor.check(VAULT, { claudeBin: CLAUDE_BIN }) };
+  return doctorCache.findings;
+}
+// Before a bot runs: an error that names it stops it, with the fix.
+function gated(run, botId) {
+  const blk = doctor.blockers(doctorNow(true), botId);
+  if (!blk.length) return true;
+  finish(run, 'error', `Setup issue: ${blk[0].message} ${blk[0].fix}`.trim(), { kind: 'setup', findings: blk });
+  return false;
+}
 const { dayOf } = require('./time');
 const BUTTON_SYNCS = { slack: syncSlackMcp, linear: syncLinearMcp, notion: syncNotionMcp, gcal: syncGcalMcp, gdrive: syncGdriveMcp };
 
@@ -225,6 +242,7 @@ function isRunning(botId) { return [...runs.values()].some((r) => r.bot === botI
 async function runBotAndWait(botId, claudeBin, body = {}) {
   const bot = BOTS.find((b) => b.id === botId);
   const run = newRun(bot);
+  if (!gated(run, botId)) return run;
   await Promise.resolve(bot.run(run, claudeBin, body)).catch((e) => failRun(run, e));
   if (run.status === 'running') finish(run, 'error', 'bot returned without finishing');
   return run;
@@ -232,11 +250,21 @@ async function runBotAndWait(botId, claudeBin, body = {}) {
 
 // The timer (lib/schedule.js). Called once by server.js after it starts listening.
 function start(claudeBin) {
+  CLAUDE_BIN = claudeBin;
+  for (const f of doctorNow(true)) if (f.level !== 'info') console.log(`doctor ${f.level}: ${f.message}${f.fix ? ` Fix: ${f.fix}` : ''}`);
   if (!claudeBin) return;
   startScheduler({
     vault: VAULT,
     startMorning: () => {
       if (isRunning('morning')) return;
+      // Blocked by setup: no run record every 5-minute tick; one log line a
+      // day, and the Today page shows the issue. It runs once it is fixed.
+      const blk = doctor.blockers(doctorNow(true), 'morning');
+      if (blk.length) {
+        const day = new Date().toDateString();
+        if (morningBlockedOn !== day) { morningBlockedOn = day; console.log(`Morning run held: ${blk[0].message}`); }
+        return;
+      }
       const bot = BOTS.find((b) => b.id === 'morning');
       const run = newRun(bot);
       logLine(run, 'started by the schedule');
@@ -504,8 +532,19 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     return true;
   }
 
+  // Repair creates only what is missing (folders, starter wiki files); it
+  // never overwrites. The session-based Repair (Phase 2) builds on this.
+  if (p === '/api/brain/doctor/repair' && req.method === 'POST') {
+    const made = doctor.repair(VAULT);
+    const left = doctorNow(true).filter((f) => f.level === 'error');
+    json(res, 200, { made, left });
+    return true;
+  }
+
   if (p === '/api/brain/bots' && req.method === 'GET') {
-    json(res, 200, { vault: VAULT, bots: botsView(), schedule: { ...scheduleSettings(VAULT), next: nextRun(VAULT) } });
+    CLAUDE_BIN = CLAUDE_BIN || claudeBin;
+    const setup = doctorNow().filter((f) => f.level !== 'info');
+    json(res, 200, { vault: VAULT, bots: botsView(), setup, schedule: { ...scheduleSettings(VAULT), next: nextRun(VAULT) } });
     return true;
   }
 
@@ -518,7 +557,8 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     if (busy) return json(res, 409, { error: `${bot.name} is already running`, runId: busy.id }), true;
     const body = await readBody(req).catch(() => ({}));
     const run = newRun(bot);
-    Promise.resolve(bot.run(run, claudeBin, body || {})).catch((e) => failRun(run, e));
+    CLAUDE_BIN = CLAUDE_BIN || claudeBin;
+    if (gated(run, bot.id)) Promise.resolve(bot.run(run, claudeBin, body || {})).catch((e) => failRun(run, e));
     json(res, 200, { runId: run.id });
     return true;
   }
