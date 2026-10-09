@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Second Brain</title>
+<link rel="stylesheet" href="brain.css">
+</head>
+<body>
+  <main>
+    <div id="bar">
+      <span id="bar-title">Second Brain</span>
+      <span id="bar-sched"></span>
+      <span class="spacer"></span>
+      <button id="log-toggle" class="ghost small" title="Show or hide the run log">Log</button>
+    </div>
+    <div id="app">
+      <nav id="nav"></nav>
+      <section id="page"></section>
+      <aside id="drawer" hidden>
+        <header><h2>Log</h2><span class="spacer"></span><span id="drawer-sub" class="muted"></span></header>
+        <div id="drawer-log"></div>
+      </aside>
+    </div>
+  </main>
+<script>window.BRAIN_TOKEN = "__BRAIN_TOKEN__";</script>
+<script src="brain.js"></script>
+</body>
+</html>

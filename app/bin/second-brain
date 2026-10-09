@@ -1,0 +1,18 @@
+#!/bin/bash
+# Start the Second Brain app (if it isn't running) and open its window.
+#   SECOND_BRAIN_VAULT  path to your vault (default ~/cursor/obsidian)
+#   SECOND_BRAIN_PORT   port (default 19300)
+set -euo pipefail
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PORT="${SECOND_BRAIN_PORT:-19300}"
+STATE="${SECOND_BRAIN_STATE_DIR:-$HOME/.second-brain}"
+NODE="$(command -v node || echo /opt/homebrew/bin/node)"
+mkdir -p "$STATE"
+if ! lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  BRIEFCASE_VAULT="${SECOND_BRAIN_VAULT:-$HOME/cursor/obsidian}" SECOND_BRAIN_PORT="$PORT" \
+    nohup "$NODE" "$APP_DIR/server.js" >>"$STATE/server.log" 2>&1 &
+  for _ in $(seq 1 30); do lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1 && break; sleep 0.2; done
+fi
+# Its own window: a Chrome app window with its own profile, no tabs or URL bar.
+open -na "Google Chrome" --args --app="http://localhost:$PORT" --user-data-dir="$STATE/chrome"
+echo "Second Brain on http://localhost:$PORT (log: $STATE/server.log)"

@@ -248,5 +248,23 @@ for f in tests/fixture/slack/.last-sync tests/fixture/wiki/.last-ingest; do
   if git check-ignore -q "$f"; then bad "fixture $f survives gitignore" "trackable" "IGNORED"; else ok "fixture path $f is trackable"; fi
 done
 
+# ===========================================================================
+sect "6. Name check (no private names in anything that would be committed)"
+# ===========================================================================
+# The kit repo is PUBLIC. A denylist of partner, customer, people and ID terms
+# lives OUTSIDE the repo (it is itself a list of private names), at
+# $SECOND_BRAIN_DENYLIST or ~/.second-brain/denylist.txt. Every file git would
+# commit (tracked + untracked-not-ignored) is checked, whole word, any case.
+# No denylist = skip, so a fresh clone's test run still passes.
+DENY="${SECOND_BRAIN_DENYLIST:-$HOME/.second-brain/denylist.txt}"
+if [ -f "$DENY" ]; then
+  DL=$(mktemp); grep -v '^#' "$DENY" | grep -v '^[[:space:]]*$' > "$DL"
+  hits=$(git ls-files -co --exclude-standard -z | xargs -0 grep -wiIlF -f "$DL" 2>/dev/null | tr '\n' ' ')
+  rm -f "$DL"
+  is "no denylist term in committable files" "" "$hits"
+else
+  printf '  skip name check (no denylist at %s)\n' "$DENY"
+fi
+
 printf '\n=========================\n  PASS %s   FAIL %s\n=========================\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -1,0 +1,560 @@
+// Brain — chat with your second-brain vault, and watch the bots that keep it.
+//
+//   POST /api/brain/chat            one chat turn  → { text, sessionId, costUsd, model, ms }
+//   GET  /api/brain/bots            bot registry + each bot's latest run
+//   POST /api/brain/bots/:id/run    start a run (async) → { runId }
+//   GET  /api/brain/runs?bot=<id>   recent runs for one bot
+//
+// Chat is built to be cheap. Every turn is one `claude -p` call that:
+//   * runs in an EMPTY cwd with --add-dir <vault>, so the vault's ~1000-line
+//     CLAUDE.md is not re-read on every message — the prompt below says how to
+//     navigate instead;
+//   * loads NO MCP servers (--strict-mcp-config + empty config). Otherwise every
+//     server on this machine starts up and a turn takes minutes (lib/topic.js
+//     found this the hard way);
+//   * can only Read / Grep / Glob, so it cannot change the vault;
+//   * resumes the previous turn's session, so follow-ups keep context.
+//
+// Bots that need a source (Slack, Linear, …) are different: they DO load the
+// claude.ai connectors, because that is the only way headless runs reach them.
+// Measured 2026-10-01: plugin MCP tools (mcp__plugin_*) never load under -p;
+// the claude.ai connector names do.
+//
+//   bot run lifecycle
+//   ─────────────────
+//   POST run ──▶ status:running ──▶ child exits ──▶ parse ──▶ ok | warn | error
+//                     │                                          │
+//                     └── log lines streamed into run.log ───────┴──▶ .bot/runs/<ts>-<bot>.json
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawn } = require('child_process');
+const sync = require('./sync');
+const { runIngest } = require('./ingest');
+const { runVerify } = require('./verify-bot');
+const { runBrief } = require('./brief-bot');
+const { runResolve } = require('./resolve-bot');
+const { runRestructure } = require('./restructure-bot');
+const { runMorning, startScheduler, nextRun, settings: scheduleSettings } = require('./schedule');
+const { syncSlackMcp } = require('./slack-mcp');
+const { syncLinearMcp } = require('./linear-mcp');
+const { syncNotionMcp } = require('./notion-mcp');
+const { syncGcalMcp } = require('./gcal-mcp');
+const { syncGdriveMcp } = require('./gdrive-mcp');
+// Sources synced by "model presses buttons, code writes" (no model-written raw).
+const { readOwner } = require('./config');
+const BUTTON_SYNCS = { slack: syncSlackMcp, linear: syncLinearMcp, notion: syncNotionMcp, gcal: syncGcalMcp, gdrive: syncGdriveMcp };
+
+const VAULT = process.env.BRIEFCASE_VAULT || path.join(os.homedir(), 'cursor', 'obsidian');
+const STATE_DIR = process.env.BRIEFCASE_STATE_DIR || path.join(os.homedir(), '.second-brain');
+const CHAT_CWD = path.join(STATE_DIR, 'brain-cwd');
+const EMPTY_MCP = path.join(STATE_DIR, 'no-mcp.json');
+const RUNS_DIR = path.join(VAULT, '.bot', 'runs');
+
+const CHAT_MODELS = new Set(['haiku', 'sonnet']);
+const CHAT_BUDGET_USD = '0.50';
+const CHAT_TIMEOUT_MS = 180000;
+
+// Grep-first, not index-first. Measured 2026-10-01 on "what's open with <partner>":
+// reading wiki/index.md (75KB) first cost $0.14 / 27s on haiku; grepping first
+// cost $0.05 / 14s with an equally grounded answer.
+const CHAT_PROMPT = `You are the owner's second brain: a personal wiki at ${VAULT}.
+Answer questions from it, and ONLY from it. How to navigate:
+1. ALWAYS start by using Grep on ${VAULT}/wiki for the key names and terms in the question. Never answer before searching.
+2. Read only the 1-3 most relevant pages that Grep found. Read ${VAULT}/wiki/index.md only if Grep finds nothing useful.
+3. Open raw sources (slack/, linear/, notion/, gcal/, gdrive/, projects/) only when the wiki lacks the detail asked for.
+4. Cite every page you used as a wikilink, e.g. [[wiki/partners/acme]] or [[slack/2026-09-21]].
+Rules: be brief and concrete; lead with the answer; say plainly when the vault doesn't know. You are read-only. You only see the vault, never a live system, so mention dates when freshness matters.`;
+
+fs.mkdirSync(CHAT_CWD, { recursive: true });
+try { fs.writeFileSync(EMPTY_MCP, '{"mcpServers":{}}'); } catch {}
+
+function claudeEnv() {
+  // A stale ANTHROPIC_API_KEY in the environment beats the claude.ai login
+  // and 401s (lib/topic.js). Strip it so the subscription login is used.
+  const env = { ...process.env };
+  delete env.ANTHROPIC_API_KEY;
+  return env;
+}
+
+// Run `claude -p` and resolve with its parsed --output-format json result.
+// stdin is closed on purpose: an open stdin makes -p print a "no stdin data"
+// warning into stdout, which breaks the JSON parse (measured 2026-10-01).
+function claudeJSON(claudeBin, args, { cwd, timeoutMs, onLine } = {}) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const child = spawn(claudeBin, args, { cwd, env: claudeEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '', err = '';
+    child.stdout.on('data', (c) => { out += c; });
+    child.stderr.on('data', (c) => {
+      err += c;
+      if (onLine) String(c).split('\n').filter(Boolean).forEach(onLine);
+    });
+    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs || CHAT_TIMEOUT_MS);
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      const ms = Date.now() - started;
+      const line = out.split('\n').find((l) => l.startsWith('{')) || '';
+      let parsed = null;
+      try { parsed = JSON.parse(line); } catch {}
+      resolve({ code, ms, parsed, stderr: err.slice(-2000), raw: out.slice(0, 2000) });
+    });
+  });
+}
+
+// --- chat ------------------------------------------------------------------
+
+async function chat(claudeBin, { message, sessionId, model }) {
+  const m = CHAT_MODELS.has(model) ? model : 'haiku';
+  const args = [
+    '-p', String(message).slice(0, 8000),
+    '--model', m,
+    '--output-format', 'json',
+    '--mcp-config', EMPTY_MCP, '--strict-mcp-config',
+    '--add-dir', VAULT,
+    '--allowedTools', 'Read,Grep,Glob',
+    '--permission-prompts', 'none',
+    '--append-system-prompt', CHAT_PROMPT,
+    '--max-budget-usd', CHAT_BUDGET_USD,
+  ];
+  if (sessionId && /^[0-9a-f-]{36}$/.test(sessionId)) args.push('--resume', sessionId);
+  const r = await claudeJSON(claudeBin, args, { cwd: CHAT_CWD });
+  const p = r.parsed;
+  if (!p) return { error: `claude returned no result (exit ${r.code}). ${r.stderr || r.raw}`.trim(), ms: r.ms };
+  if (p.is_error) {
+    const why = p.subtype === 'error_max_budget_usd'
+      ? `This turn hit the $${CHAT_BUDGET_USD} cap. Try a narrower question, or start a new chat.`
+      : (p.result || p.subtype || 'error');
+    return { error: why, sessionId: p.session_id, costUsd: p.total_cost_usd, model: m, ms: r.ms };
+  }
+  // num_turns 1 means the model answered without calling a single tool, i.e.
+  // without reading the vault. Surfaced in the UI rather than trusted silently.
+  return { text: p.result || '', sessionId: p.session_id, costUsd: p.total_cost_usd || 0, model: m, ms: r.ms, unread: (p.num_turns || 0) <= 1 };
+}
+
+// --- bots ------------------------------------------------------------------
+// One entry per bot. `kind` says what it costs to run:
+//   model  — calls claude (shows a $ cost)
+//   bash   — runs a vault script, no tokens
+//   later  — designed, not built yet; shown so the board tells the truth
+
+const HEALTH_TOOLS = {
+  slack: 'mcp__claude_ai_Slack__slack_read_user_profile',
+  linear: 'mcp__claude_ai_Linear__list_teams',
+  notion: 'mcp__claude_ai_Notion__notion-get-users',
+  gcal: 'mcp__claude_ai_Google_Calendar__list_calendars',
+  gdrive: 'mcp__claude_ai_Google_Drive__list_recent_files',
+};
+
+const BOTS = [
+  {
+    id: 'morning', name: 'Morning run', kind: 'model',
+    blurb: 'The scheduled chain: every sync, then Resolve (your Needs-You ticks), then Brief, then Ingest when due (60+ new files or 3+ days), then Verify after an ingest. Runs once a day at schedule.morning_at in config.yaml, or on wake if the laptop slept through it.',
+    run: (run, claudeBin) => runMorning(run, { vault: VAULT, logLine, finish, isRunning, runBot: (id, body) => runBotAndWait(id, claudeBin, body) }),
+  },
+  {
+    id: 'health', name: 'Health', kind: 'model',
+    blurb: 'Can each source be reached right now? One cheap call per connector.',
+    run: runHealth,
+  },
+  {
+    id: 'lint', name: 'Lint', kind: 'bash',
+    blurb: 'Dead links, raw purity and annotations in raw. A vault script, no tokens.',
+    run: (run) => runScript(run, path.join(VAULT, 'docs', 'audits', 'linkrot-lint.sh'), summarizeLint),
+  },
+  {
+    id: 'deltas', name: 'Deltas', kind: 'bash',
+    blurb: 'What changed since the last ingest, per source. No tokens.',
+    run: (run) => runScript(run, path.join(VAULT, 'docs', 'audits', 'delta-walk.sh'), summarizeDeltas),
+  },
+  // One sync bot per source, so each can be run and watched on its own.
+  ...Object.entries(sync.SOURCES).map(([key, src]) => (BUTTON_SYNCS[key] ? {
+    // The model only presses the connector's buttons; the runner picks every
+    // call and writes the files (lib/{slack,linear,notion}-mcp.js).
+    id: `sync-${key}`, name: `Sync ${src.name}`, kind: 'model',
+    blurb: `${src.name} via the claude.ai connector. Haiku calls the tools; code writes the files, so nothing in raw is model-written.`,
+    run: (run, claudeBin, body = {}) => BUTTON_SYNCS[key](run, { claudeBin, vault: VAULT, env: claudeEnv(), logLine, finish, src, body }),
+  } : {
+    id: `sync-${key}`, name: `Sync ${src.name}`, kind: 'model',
+    blurb: `Pull new ${src.name} data since the watermark (at least the last ${src.windowDays || 4} days). Budget $${src.budget}.`,
+    run: (run, claudeBin) => sync.runSync(run, { claudeBin, vault: VAULT, env: claudeEnv(), logLine, finish }, key),
+  })),
+  {
+    id: 'verify', name: 'Verify', kind: 'model',
+    blurb: 'Checks the wiki against what ingest says it did: structure, staleness, lint, and a sampled coverage check (~$0.5). Queues contradictions and gaps in Needs-You.md.',
+    run: (run, claudeBin) => runVerify(run, { claudeBin, vault: VAULT, env: claudeEnv(), logLine, finish, summarizeLint }),
+  },
+  {
+    id: 'ingest', name: 'Ingest', kind: 'model',
+    blurb: 'Fold new raw files into wiki pages, in ~45KB parts so every message is read. Holds sources whose sync failed. ~$0.5/part, $40 cap; a stopped run resumes.',
+    run: (run, claudeBin, body = {}) => runIngest(run, {
+      claudeBin, vault: VAULT, env: claudeEnv(), logLine, finish, latestFor,
+      syncBotIds: Object.keys(sync.SOURCES).map((k) => `sync-${k}`),
+    }, { files: Array.isArray(body.files) ? body.files.map(String) : [], maxParts: Number(body.maxParts) || 0, hints: body.hints && typeof body.hints === 'object' ? body.hints : {} }),
+  },
+  {
+    id: 'resolve', name: 'Resolve', kind: 'model',
+    blurb: 'Applies your ticks in Needs-You.md: a picked claim edits the wiki pages that state the other one (Sonnet, ~$0.2 each, EDIT only, originals backed up), "re-ingest" runs a named-file Ingest, "ignore" just records it.',
+    run: (run, claudeBin) => runResolve(run, { claudeBin, vault: VAULT, env: claudeEnv(), logLine, finish, runBot: (id, body) => runBotAndWait(id, claudeBin, body) }),
+  },
+  {
+    id: 'restructure', name: 'Restructure', kind: 'model',
+    blurb: 'Supervised. Splits the biggest append-log wiki page (over 150KB) into a hub (what is true now: Current state, Timeline, Open questions by Opus, ~$3) and a verbatim -history page. Stages it in .bot/restructure/ for you; tick "apply" in its report.md and run again to apply. Never in the Morning run.',
+    run: (run, claudeBin, body = {}) => runRestructure(run, { claudeBin, vault: VAULT, env: claudeEnv(), logLine, finish }, body),
+  },
+  {
+    id: 'brief', name: 'Brief', kind: 'model',
+    blurb: "Where to focus today. Reads what came in across Slack, Linear and Notion plus today's calendar and says where to focus, with a source link on every line (Sonnet, ~$0.3). Writes Brief.md. Refreshes the calendar first if it is over 3h old (~$1).",
+    run: async (run, claudeBin, body = {}) => {
+      // The brief is for today, so today's calendar has to be fresh. The sync
+      // runs as its own recorded run; if it fails Brief still renders, flagged.
+      let refreshed = null;
+      const calFile = path.join(VAULT, 'gcal', `${localDay()}.md`);
+      const age = fs.existsSync(calFile) ? Date.now() - fs.statSync(calFile).mtimeMs : Infinity;
+      if (!body.noRefresh && age > 3 * 3600e3 && claudeBin) {
+        const calBot = BOTS.find((b) => b.id === 'sync-gcal');
+        const child = newRun(calBot);
+        logLine(run, 'today\'s calendar is stale; running Sync Calendar first…');
+        await Promise.resolve(calBot.run(child, claudeBin, {})).catch((e) => finish(child, 'error', e.message));
+        refreshed = { status: child.status, summary: child.summary, costUsd: child.costUsd };
+        logLine(run, `Sync Calendar: ${child.status} · ${child.summary}`);
+      }
+      return runBrief(run, { vault: VAULT, logLine, finish, latestFor, owner: readOwner(VAULT), ownerName: readOwner(VAULT).name, refreshed, claudeBin, env: claudeEnv(), run, noSynth: body.noSynth });
+    },
+  },
+];
+
+const runs = new Map(); // runId -> run (in memory, newest kept per bot)
+let seq = 0;
+
+function localDay(d = new Date()) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+function isRunning(botId) { return [...runs.values()].some((r) => r.bot === botId && r.status === 'running'); }
+
+// Start a bot as its own recorded run and resolve with that run when it ends.
+async function runBotAndWait(botId, claudeBin, body = {}) {
+  const bot = BOTS.find((b) => b.id === botId);
+  const run = newRun(bot);
+  await Promise.resolve(bot.run(run, claudeBin, body)).catch((e) => finish(run, 'error', e.message));
+  if (run.status === 'running') finish(run, 'error', 'bot returned without finishing');
+  return run;
+}
+
+// The timer (lib/schedule.js). Called once by server.js after it starts listening.
+function start(claudeBin) {
+  if (!claudeBin) return;
+  startScheduler({
+    vault: VAULT,
+    startMorning: () => {
+      if (isRunning('morning')) return;
+      const bot = BOTS.find((b) => b.id === 'morning');
+      const run = newRun(bot);
+      logLine(run, 'started by the schedule');
+      Promise.resolve(bot.run(run, claudeBin)).catch((e) => finish(run, 'error', e.message));
+    },
+  });
+}
+
+function stampNow() { return new Date().toISOString(); }
+
+function newRun(bot) {
+  const id = `${Date.now().toString(36)}${(seq++).toString(36)}`;
+  const run = { id, bot: bot.id, status: 'running', startedAt: stampNow(), endedAt: null, costUsd: 0, summary: '', detail: null, log: [] };
+  runs.set(id, run);
+  return run;
+}
+
+function logLine(run, text) {
+  run.log.push(`${new Date().toTimeString().slice(0, 8)} ${text}`);
+  if (run.log.length > 400) run.log.splice(0, run.log.length - 400);
+}
+
+function finish(run, status, summary, detail, costUsd = 0) {
+  Object.assign(run, { status, summary, detail, costUsd, endedAt: stampNow() });
+  logLine(run, `${status.toUpperCase()}: ${summary}`);
+  try {
+    fs.mkdirSync(RUNS_DIR, { recursive: true });
+    const name = `${run.startedAt.replace(/[:.]/g, '-')}-${run.bot}.json`;
+    fs.writeFileSync(path.join(RUNS_DIR, name), JSON.stringify(run, null, 2));
+  } catch (e) {
+    run.log.push(`(could not save run record: ${e.message})`);
+  }
+}
+
+async function runHealth(run, claudeBin) {
+  const names = Object.entries(HEALTH_TOOLS).map(([k, t]) => `${k}: ${t}`).join('\n');
+  const prompt = `Health probe. For each source below, call its tool exactly once with minimal arguments (Slack: user_id ${readOwner(VAULT).slack_user_id || 'unknown'}, response_format concise. Notion: query "a", page_size 1. Drive: pageSize 1). Call nothing else except ToolSearch if a schema needs loading. Do not print any personal data.\n${names}\nReply with ONLY a JSON object: for each source {"status": one of ok | auth (the service said you are not authenticated) | missing (tool not available) | error, "reason": "under 12 words"}.`;
+  logLine(run, 'probing 5 connectors (haiku)…');
+  const r = await claudeJSON(claudeBin, [
+    '-p', prompt, '--model', 'haiku', '--output-format', 'json',
+    '--allowedTools', ['ToolSearch', ...Object.values(HEALTH_TOOLS)].join(','),
+    '--permission-prompts', 'none', '--max-budget-usd', '0.50', '--no-session-persistence',
+  ], { cwd: CHAT_CWD, timeoutMs: 240000 });
+  const p = r.parsed;
+  if (!p) return finish(run, 'error', `claude gave no result (exit ${r.code})`, { stderr: r.stderr });
+  const m = String(p.result || '').match(/\{[\s\S]*\}/);
+  let status = {};
+  try { status = m ? JSON.parse(m[0]) : {}; } catch {}
+  // Haiku sometimes nests {status, reason}; flatten to the bare status.
+  const reasons = {};
+  for (const [k, v] of Object.entries(status)) {
+    if (v && typeof v === 'object') { reasons[k] = v.reason || ''; status[k] = String(v.status || 'unknown'); }
+  }
+  // A tool the CLI itself refused is a permission problem, whatever the model says.
+  for (const d of p.permission_denials || []) {
+    const src = Object.keys(HEALTH_TOOLS).find((k) => HEALTH_TOOLS[k] === d.tool_name);
+    if (src) status[src] = 'permission';
+  }
+  for (const k of Object.keys(HEALTH_TOOLS)) if (!status[k]) status[k] = 'unknown';
+  const bad = Object.entries(status).filter(([, v]) => v !== 'ok');
+  for (const [k, v] of Object.entries(status)) logLine(run, `${k}: ${v}${reasons[k] ? ` (${reasons[k]})` : ''}`);
+  const summary = bad.length ? `${5 - bad.length}/5 ok · ${bad.map(([k, v]) => `${k} ${v}`).join(', ')}` : '5/5 ok';
+  finish(run, bad.length ? 'warn' : 'ok', summary, { sources: status, reasons, answer: String(p.result || '').slice(0, 2000), ms: r.ms }, p.total_cost_usd || 0);
+}
+
+function runScript(run, script, summarize) {
+  return new Promise((resolve) => {
+    if (!fs.existsSync(script)) { finish(run, 'error', `missing ${script}`); return resolve(); }
+    logLine(run, `bash ${path.relative(VAULT, script)}`);
+    const child = spawn('/bin/bash', [script], { cwd: VAULT, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (c) => { out += c; });
+    child.stderr.on('data', (c) => { out += c; });
+    child.on('close', (code) => {
+      out.split('\n').filter(Boolean).slice(-60).forEach((l) => logLine(run, l));
+      const { status, summary } = summarize(out, code);
+      finish(run, status, summary, { exit: code });
+      resolve();
+    });
+  });
+}
+
+function summarizeLint(out, code) {
+  // Read each section's own count line. The script ends with a generic
+  // "OK: no findings" footer even when sections above it found things, so the
+  // footer is ignored on purpose.
+  const num = (re) => { const m = out.match(re); return m ? Number(m[1]) : 0; };
+  const malformed = (out.split('## 4.')[1] || '').split('## 5.')[0].split('\n').filter((l) => l.startsWith('[[')).length;
+  const found = [
+    ['dead source links', num(/ACTIONABLE \(dead \+ UNannotated\) occurrences: (\d+)/)],
+    // One dead wiki->wiki link is the <name> template placeholder, expected.
+    ['dead wiki links', Math.max(0, num(/Total dead wiki->wiki links: (\d+)/) - 1)],
+    ['malformed links', malformed],
+    ['wiki links in raw', num(/backlinks \(should be 0\): (\d+)/)],
+    ['raw files w/ annotations', num(/total raw files carrying suspected annotations: (\d+)/)],
+  ].filter(([, n]) => n > 0);
+  if (code !== 0) return { status: 'error', summary: `lint exited ${code}` };
+  if (!found.length) return { status: 'ok', summary: 'no findings' };
+  return { status: 'warn', summary: found.map(([w, n]) => `${n} ${w}`).join(' · ') };
+}
+
+function summarizeDeltas(out, code) {
+  const line = (out.match(/Deltas walked:[^\n]*/) || [''])[0];
+  if (code !== 0 || !line) return { status: 'error', summary: `delta-walk exited ${code}` };
+  const parts = line.replace('Deltas walked:', '').split(',').map((s) => s.trim());
+  const nonzero = parts.filter((s) => /=\d+$/.test(s) && !/=0$/.test(s));
+  return { status: 'ok', summary: nonzero.length ? nonzero.join(' · ') : 'nothing new since last ingest' };
+}
+
+function latestFor(botId) {
+  let best = null;
+  for (const r of runs.values()) if (r.bot === botId && (!best || r.startedAt > best.startedAt)) best = r;
+  if (best) return best;
+  // After a server restart, fall back to the newest saved record.
+  try {
+    const f = fs.readdirSync(RUNS_DIR).filter((n) => n.endsWith(`-${botId}.json`)).sort().pop();
+    if (f) return JSON.parse(fs.readFileSync(path.join(RUNS_DIR, f), 'utf8'));
+  } catch {}
+  return null;
+}
+
+// --- "your move" --------------------------------------------------------------
+// What a bot is waiting on from the owner, so the board can show it instead of
+// a bare log. Files are vault-relative; the UI views them via /api/brain/file.
+
+const RESTRUCTURE_DIR = path.join('.bot', 'restructure');
+
+function stagedRestructures() {
+  const root = path.join(VAULT, RESTRUCTURE_DIR);
+  if (!fs.existsSync(root)) return [];
+  return fs.readdirSync(root)
+    .filter((d) => !d.includes('-applied-') && fs.existsSync(path.join(root, d, 'report.md')))
+    .map((slug) => {
+      const rep = fs.readFileSync(path.join(root, slug, 'report.md'), 'utf8');
+      const title = (rep.match(/^# Restructure: (.+)$/m) || [])[1] || slug;
+      const sizes = (rep.match(/^Staged .*$/m) || [''])[0];
+      const want = (rep.match(/^Old page sha256: (\w+)/m) || [])[1];
+      let stale = false;
+      try { stale = require('crypto').createHash('sha256').update(fs.readFileSync(path.join(VAULT, title), 'utf8')).digest('hex') !== want; } catch {}
+      return { slug, title, sizes, stale, ticked: /^- \[x\] apply this restructure/im.test(rep) };
+    });
+}
+
+function needsYouOpen() {
+  try {
+    const t = fs.readFileSync(path.join(VAULT, 'Needs-You.md'), 'utf8');
+    const open = t.split(/^## Resolved/m)[0];
+    return (open.match(/^### /gm) || []).length;
+  } catch { return 0; }
+}
+
+function todoFor(id) {
+  if (id === 'restructure') {
+    const staged = stagedRestructures();
+    if (!staged.length) return null;
+    return {
+      text: staged.length === 1 ? 'A split is staged and waiting for your review.' : `${staged.length} splits are staged and waiting for your review.`,
+      items: staged.map((s) => ({
+        title: s.title,
+        note: s.stale ? `${s.sizes} OUT OF DATE: ingest changed the page after this was staged. Re-stage (Opus, ~$1.40) to review the current version.` : s.sizes,
+        files: ['report.md', 'hub.md', 'history.md'].map((f) => ({ label: f.replace('.md', ''), path: path.join(RESTRUCTURE_DIR, s.slug, f) })),
+        actions: [s.stale
+          ? { label: 'Re-stage', kind: 'restructure-apply', slug: s.slug, confirm: `Re-stage ${s.title} from the current page? Opus, about $1.40. Nothing is applied yet.` }
+          : { label: 'Apply', kind: 'restructure-apply', slug: s.slug, confirm: `Apply the ${s.title} split? The old page is backed up first.` }],
+      })),
+    };
+  }
+  // Verify writes Needs-You.md and Resolve applies it; the move belongs to Resolve only.
+  if (id === 'resolve') {
+    const n = needsYouOpen();
+    if (!n) return null;
+    return {
+      text: `${n} item(s) are waiting for your answer. Pick one choice per item on the Resolve page (or tick it in Needs-You.md in Obsidian), then press Apply my answers. The Morning run also applies them.`,
+      items: [{ title: 'Needs-You.md', actions: [{ label: 'Answer them', kind: 'goto', slug: 'resolve' }], files: [{ label: 'file', path: 'Needs-You.md' }], obsidian: 'Needs-You.md' }],
+    };
+  }
+  return null;
+}
+
+// Only files the board links to can be read through the API.
+function viewableFile(rel) {
+  const norm = path.normalize(String(rel || '')).replace(/^[/\\]+/, '');
+  if (norm.includes('..')) return null;
+  const ok = norm === 'Needs-You.md' || norm === 'Brief.md' || (norm.startsWith(RESTRUCTURE_DIR + path.sep) && norm.endsWith('.md'));
+  return ok ? path.join(VAULT, norm) : null;
+}
+
+function tickRestructure(slug) {
+  if (!/^[\w.-]+$/.test(slug)) throw new Error('bad slug');
+  const f = path.join(VAULT, RESTRUCTURE_DIR, slug, 'report.md');
+  const rep = fs.readFileSync(f, 'utf8');
+  if (!/^- \[ \] apply this restructure/m.test(rep) && !/^- \[x\] apply this restructure/im.test(rep)) throw new Error('report.md has no apply box');
+  fs.writeFileSync(f, rep.replace(/^- \[ \] apply this restructure/m, '- [x] apply this restructure'));
+}
+
+// --- Needs-You answered in the app ---------------------------------------------
+// The app ticks the same boxes the owner would tick in Obsidian, by editing the
+// item's box lines in place (any notes under items are left untouched). Resolve
+// then applies them exactly as it would a tick made by hand.
+
+const NEEDS = () => path.join(VAULT, 'Needs-You.md');
+
+function needsOpenItems() {
+  let text = '';
+  try { text = fs.readFileSync(NEEDS(), 'utf8'); } catch { return []; }
+  const { parseNeedsYou } = require('./verify-bot');
+  return [...parseNeedsYou(text).values()].filter((it) => it.section !== 'Resolved');
+}
+
+function answerNeed(id, label) {
+  if (!/^[cg]-[0-9a-f]{7}$/.test(id)) throw new Error('bad item id');
+  const lines = fs.readFileSync(NEEDS(), 'utf8').split('\n');
+  let inItem = false, found = false, hit = false;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^#{2,3} /.test(l)) { inItem = l.startsWith(`### ${id} ·`); if (inItem) found = true; continue; }
+    if (!inItem) continue;
+    const b = l.match(/^- \[( |x)\] (.+)$/i);
+    if (!b) continue;
+    // Clicking the picked box again clears it; picking another moves the tick.
+    const on = b[2] === label ? !(b[1].toLowerCase() === 'x') : false;
+    if (b[2] === label) hit = true;
+    lines[i] = `- [${on ? 'x' : ' '}] ${b[2]}`;
+  }
+  if (!found) throw new Error('item not found (Verify may have rewritten the file; reload)');
+  if (!hit) throw new Error('no such choice on that item');
+  fs.writeFileSync(NEEDS(), lines.join('\n'));
+}
+
+function botsView() {
+  return BOTS.map(({ id, name, kind, blurb }) => ({ id, name, kind, blurb, last: latestFor(id), todo: todoFor(id) }));
+}
+
+// --- HTTP ------------------------------------------------------------------
+// Returns true if it handled the request. Auth (origin + token) is enforced by
+// server.js before this is reached.
+
+async function handle(req, res, url, { json, readBody, claudeBin }) {
+  const p = url.pathname;
+  if (!p.startsWith('/api/brain/')) return false;
+
+  if (p === '/api/brain/chat' && req.method === 'POST') {
+    const body = await readBody(req);
+    if (!body.message || !String(body.message).trim()) return json(res, 400, { error: 'message required' }), true;
+    if (!claudeBin) return json(res, 500, { error: 'claude CLI not found' }), true;
+    json(res, 200, await chat(claudeBin, body));
+    return true;
+  }
+
+  if (p === '/api/brain/bots' && req.method === 'GET') {
+    json(res, 200, { vault: VAULT, bots: botsView(), schedule: { ...scheduleSettings(VAULT), next: nextRun(VAULT) } });
+    return true;
+  }
+
+  const m = p.match(/^\/api\/brain\/bots\/([a-z-]+)\/run$/);
+  if (m && req.method === 'POST') {
+    const bot = BOTS.find((b) => b.id === m[1]);
+    if (!bot) return json(res, 404, { error: 'no such bot' }), true;
+    if (!bot.run) return json(res, 409, { error: `${bot.name} is not built yet` }), true;
+    const busy = [...runs.values()].find((r) => r.bot === bot.id && r.status === 'running');
+    if (busy) return json(res, 409, { error: `${bot.name} is already running`, runId: busy.id }), true;
+    const body = await readBody(req).catch(() => ({}));
+    const run = newRun(bot);
+    Promise.resolve(bot.run(run, claudeBin, body || {})).catch((e) => finish(run, 'error', e.message));
+    json(res, 200, { runId: run.id });
+    return true;
+  }
+
+  if (p === '/api/brain/file' && req.method === 'GET') {
+    const full = viewableFile(url.searchParams.get('path'));
+    if (!full || !fs.existsSync(full)) return json(res, 404, { error: 'not viewable' }), true;
+    json(res, 200, { path: path.relative(VAULT, full), text: fs.readFileSync(full, 'utf8') });
+    return true;
+  }
+
+  if (p === '/api/brain/needs' && req.method === 'GET') {
+    json(res, 200, { items: needsOpenItems() });
+    return true;
+  }
+
+  if (p === '/api/brain/needs/answer' && req.method === 'POST') {
+    const body = (await readBody(req).catch(() => ({}))) || {};
+    if (isRunning('resolve') || isRunning('verify')) return json(res, 409, { error: 'Resolve or Verify is running and may rewrite Needs-You.md; try again in a minute' }), true;
+    try { answerNeed(String(body.id || ''), String(body.label || '')); } catch (e) { return json(res, 400, { error: e.message }), true; }
+    json(res, 200, { items: needsOpenItems() });
+    return true;
+  }
+
+  if (p === '/api/brain/restructure/apply' && req.method === 'POST') {
+    const body = await readBody(req).catch(() => ({}));
+    if (isRunning('restructure')) return json(res, 409, { error: 'Restructure is already running' }), true;
+    try { tickRestructure(String((body || {}).slug || '')); } catch (e) { return json(res, 400, { error: e.message }), true; }
+    const bot = BOTS.find((b) => b.id === 'restructure');
+    const run = newRun(bot);
+    Promise.resolve(bot.run(run, claudeBin, {})).catch((e) => finish(run, 'error', e.message));
+    json(res, 200, { runId: run.id });
+    return true;
+  }
+
+  if (p === '/api/brain/runs' && req.method === 'GET') {
+    const bot = url.searchParams.get('bot');
+    const list = [...runs.values()].filter((r) => !bot || r.bot === bot).sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
+    json(res, 200, list.slice(0, 20));
+    return true;
+  }
+
+  json(res, 404, { error: 'unknown brain endpoint' });
+  return true;
+}
+
+module.exports = { handle, start, VAULT };
