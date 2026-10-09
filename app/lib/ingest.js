@@ -30,6 +30,7 @@ const { spawn } = require('child_process');
 const { specSection, rulesSection, claudeStream, shortInput } = require('./sync');
 const { readOwner, getConfig } = require('./config');
 const { script } = require('./kit');
+const { dayOf } = require('./time');
 const { route, groupParts } = require('./route');
 const { linearTiers } = require('./tiers');
 const { addToIndex } = require('./wiki-index');
@@ -486,8 +487,7 @@ async function runPart(ctx, part, k, n) {
 async function runIngest(run, { claudeBin, vault, env, logLine, finish, latestFor, syncBotIds }, opts = {}) {
   const startMs = Date.now();
   const startIso = new Date(startMs).toISOString().replace(/\.\d+Z$/, 'Z');
-  const d = new Date(startMs);
-  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const date = dayOf(startMs, getConfig(vault).owner.timezone);
   const ownerName = readOwner(vault).name || 'the owner';
 
   // Held sources: their latest sync failed, so their files wait (ledger).

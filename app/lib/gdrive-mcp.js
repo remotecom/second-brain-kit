@@ -32,7 +32,7 @@ const { readPending, writePending } = require('./ledger');
 const P = 'mcp__claude_ai_Google_Drive__';
 const SEARCH = `${P}search_files`, RECENT = `${P}list_recent_files`, META = `${P}get_file_metadata`, READ = `${P}read_file_content`;
 const DAY = 864e5;
-const WINDOW_DAYS = 4, BOOTSTRAP_DAYS = 30, RECENT_MAX_PAGES = 10, MAX_BODY = 50000, MAX_DEPTH = 12;
+const RECENT_MAX_PAGES = 10, MAX_DEPTH = 12;
 
 // What read_file_content can read, and the short tag each gets.
 const MIME = {
@@ -52,10 +52,10 @@ const MIME = {
 const readJson = (p, d) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return d; } };
 const q = (s) => JSON.stringify(String(s == null ? '' : s));
 
-function render(meta, content, reasons, parentTitle) {
+function render(meta, content, reasons, parentTitle, maxBody = 50000) {
   let body = String(content || '').replace(/\s+$/, '');
   let truncated = false;
-  if (body.length > MAX_BODY) { body = `${body.slice(0, MAX_BODY)}\n\n[truncated at ${MAX_BODY} chars — full document at the web_link above]`; truncated = true; }
+  if (body.length > maxBody) { body = `${body.slice(0, maxBody)}\n\n[truncated at ${maxBody} chars — full document at the web_link above]`; truncated = true; }
   return [
     '---',
     `gdrive_id: ${meta.id}`,
@@ -90,10 +90,11 @@ async function syncGdriveMcp(run, ctx) {
 
   let wm = null; try { wm = Date.parse(fs.readFileSync(path.join(dir, '.last-sync'), 'utf8').trim()); } catch {}
   const now = Date.now();
-  const windowStart = now - WINDOW_DAYS * DAY;
-  const T = Number.isFinite(wm) ? Math.min(windowStart, wm) : now - BOOTSTRAP_DAYS * DAY;
+  const bootDays = getConfig(vault).bootstrap_days;
+  const windowStart = now - gd.window_days * DAY;
+  const T = Number.isFinite(wm) ? Math.min(windowStart, wm) : now - bootDays * DAY;
   const tIso = new Date(T).toISOString().replace(/\.\d+Z$/, 'Z');
-  log(`files modified after ${tIso}${Number.isFinite(wm) ? '' : ' (first run, 30-day bootstrap)'} · ${watched.length} watched folder(s) · haiku presses, runner writes`);
+  log(`files modified after ${tIso}${Number.isFinite(wm) ? '' : ` (first run, ${bootDays}-day bootstrap)`} · ${watched.length} watched folder(s) · haiku presses, runner writes`);
 
   // 1. Discovery.
   const listPage = (j) => (Array.isArray(j.files) ? { items: j.files, next: j.nextPageToken || null } : null);
@@ -168,7 +169,7 @@ async function syncGdriveMcp(run, ctx) {
       const got = (f.results.get(f.keyOf({ fileId: id, includeComments: true })) || [])[0];
       if (!got) { x.meta.reasons = [...x.reasons]; pendingNext.push(x.meta); continue; }
       counts.fetched++;
-      const text = render(x.meta, got.fileContent, [...x.reasons], (cache[x.meta.parentId] || {}).title);
+      const text = render(x.meta, got.fileContent, [...x.reasons], (cache[x.meta.parentId] || {}).title, gd.max_body_chars);
       if (/^truncated: true$/m.test(text)) counts.truncated++;
       files.set(`gdrive/files/${id}.md`, text);
     }

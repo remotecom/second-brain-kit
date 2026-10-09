@@ -19,11 +19,11 @@ const path = require('path');
 const { collect } = require('./buttons');
 const { verify, commit } = require('./sync');
 const { readPending, writePending } = require('./ledger');
+const { getConfig } = require('./config');
 const { linearTiers } = require('./tiers');
 
 const T = (name) => `mcp__claude_ai_Linear__${name}`;
 const DAY = 86400000;
-const WINDOW_DAYS = 4;
 
 const q = (v) => (v === null || v === undefined || v === '' ? 'null' : JSON.stringify(String(v)));
 const iso = (ms) => new Date(ms).toISOString();
@@ -69,12 +69,14 @@ async function syncLinearMcp(run, ctx) {
   try { scope = JSON.parse(fs.readFileSync(scopePath, 'utf8')); } catch { return finish(run, 'error', 'linear/.initiative-scope.json missing or unreadable; run a rescope first'); }
   if (!scope.projects || scope.projects.length < 150) return finish(run, 'error', `scope looks truncated (${(scope.projects || []).length} projects, expected ~200); not syncing`);
 
-  // Range: MIN(4-day window, watermark), per the spec.
+  // Range: MIN(window, watermark), per the spec; bootstrap_days on the first run.
+  const cfg = getConfig(vault);
   const now = Date.now();
-  const windowStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate()) - (WINDOW_DAYS - 1) * DAY;
+  const utcToday = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
+  const windowStart = utcToday - (cfg.sources.linear.window_days - 1) * DAY;
   let wm = null;
   try { wm = Date.parse(fs.readFileSync(path.join(vault, 'linear', '.last-sync'), 'utf8').trim()); } catch {}
-  const since = Number.isFinite(wm) ? Math.min(windowStart, wm) : windowStart;
+  const since = Number.isFinite(wm) ? Math.min(windowStart, wm) : utcToday - (cfg.bootstrap_days - 1) * DAY;
   const threshold = iso(since);
   log(`updated since ${threshold.slice(0, 16)}Z · ${scope.projects.length} projects, ${scope.initiatives.length} initiatives in scope · haiku presses buttons, runner writes`);
   let cost = 0;

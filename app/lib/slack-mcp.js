@@ -14,7 +14,8 @@
 //   phase 2  runner: thread list (Reply count > 0 or thread_ts in permalink)
 //            model calls read_thread on each, in batches
 //            runner: every listed thread must come back, or HOLD
-//   render   runner: day files (Pacific days, as Slack displays them)
+//   render   runner: day files (the owner's days, owner.timezone; Slack's
+//            formatted times are in the Slack profile's zone, keep them equal)
 //            ─▶ sync.verify ─▶ sync.commit ─▶ watermark
 
 const fs = require('fs');
@@ -22,7 +23,8 @@ const path = require('path');
 const { claudeStream, verify, commit, rangeFor } = require('./sync');
 const { redact } = require('./redact');
 const { pressButtons } = require('./buttons');
-const { requireOwner } = require('./config');
+const { requireOwner, getConfig } = require('./config');
+const { dayOf, dayStart } = require('./time');
 const { readPending, writePending } = require('./ledger');
 
 const SEARCH = 'mcp__claude_ai_Slack__slack_search_public_and_private';
@@ -31,7 +33,6 @@ const PLACEHOLDER = '_Earlier replies not synced (mention-only thread)._';
 const MENTION_TAIL = 5;
 const THREAD_BATCH = 30;
 const DAY = 86400000;
-const TZ = 'America/Los_Angeles';
 
 function parseJSONText(text) {
   try { return JSON.parse(text); } catch { return null; }
@@ -93,12 +94,8 @@ function cleanText(t, onSecret) {
   return redact(s, onSecret).split('\n').join('\n  ');
 }
 
-// Pacific-midnight unix seconds for a YYYY-MM-DD.
-function pacificMidnight(day) {
-  const guess = Date.parse(`${day}T08:00:00Z`); // PDT midnight; adjust if PST
-  const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', hourCycle: 'h23' }).format(new Date(guess)));
-  return Math.floor((guess - h * 3600000) / 1000);
-}
+// Unix seconds of local midnight that starts a YYYY-MM-DD in tz.
+const midnight = (day, tz) => Math.floor(dayStart(day, tz) / 1000);
 const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 
 // --- the bot ------------------------------------------------------------------
@@ -106,24 +103,25 @@ const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 async function syncSlackMcp(run, ctx) {
   const { vault, logLine, finish, src } = ctx;
   const log = (s) => logLine(run, s);
-  // Pacific days throughout: Slack displays and the day files use them, and
-  // using UTC "today" ran the range a day into the future after 5pm PT.
-  const pacToday = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  const r0 = rangeFor(vault, src, Date.parse(`${pacToday}T12:00:00Z`));
+  // The owner's days throughout: the day files use them, and using UTC
+  // "today" ran the range a day into the future in the evening (2026-10-01).
+  const cfg = getConfig(vault), tz = cfg.owner.timezone;
+  const localToday = dayOf(new Date(), tz);
+  const r0 = rangeFor(vault, { ...src, windowDays: cfg.sources.slack.window_days }, Date.parse(`${localToday}T12:00:00Z`));
   // The range is the rolling window plus any day still holding a thread an
   // earlier run could not read (.bot/state/slack-pending.json). Not the
   // watermark: one unread thread used to hold it, and every later run then
   // re-walked from that day (09-21 → 10-02, measured 2026-10-02).
   const pendingDays = readPending(vault, 'slack').filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
   const since = Math.min(r0.windowStart, ...pendingDays.map((d) => Date.parse(`${d}T00:00:00Z`)));
-  const range = { ...r0, since, today: Date.parse(`${pacToday}T00:00:00Z`) };
+  const range = { ...r0, since, today: Date.parse(`${localToday}T00:00:00Z`) };
   if (pendingDays.length) log(`re-walking ${pendingDays.length} day(s) with threads left unread last time: ${pendingDays.join(', ')}`);
   const days = [];
   for (let d = range.since; d <= range.today; d += DAY) days.push(isoDay(d));
   let owner;
   try { owner = requireOwner(vault, ['slack_user_id', 'name']); } catch (e) { return finish(run, 'error', e.message); }
   const me = owner.slack_user_id;
-  log(`range ${days[0]} → ${days[days.length - 1]} (Pacific days) · haiku presses buttons, runner writes`);
+  log(`range ${days[0]} → ${days[days.length - 1]} (${tz} days) · haiku presses buttons, runner writes`);
   let cost = 0;
 
   // Phase 1: searches, run to exhaustion. Unix after/before is exact, which
@@ -133,7 +131,7 @@ async function syncSlackMcp(run, ctx) {
   const hits = { sent: new Map(), mentions: new Map() };
   const pending = [];
   for (const day of days) {
-    const base = { after: String(pacificMidnight(day)), before: String(pacificMidnight(isoDay(Date.parse(`${day}T00:00:00Z`) + DAY)) - 1), include_context: false, limit: 20, sort: 'timestamp', sort_dir: 'asc', response_format: 'detailed', channel_types: 'public_channel,private_channel,mpim,im', natural_language_query: '' };
+    const base = { after: String(midnight(day, tz)), before: String(midnight(isoDay(Date.parse(`${day}T00:00:00Z`) + DAY), tz) - 1), include_context: false, limit: 20, sort: 'timestamp', sort_dir: 'asc', response_format: 'detailed', channel_types: 'public_channel,private_channel,mpim,im', natural_language_query: '' };
     pending.push({ kind: 'sent', day, args: { ...base, filters: `from:<@${me}>` }, cursor: null });
     pending.push({ kind: 'mentions', day, args: { ...base, query: `<@${me}> -from:<@${me}>` }, cursor: null });
   }
@@ -267,9 +265,9 @@ async function syncSlackMcp(run, ctx) {
   const { written, skipped } = commit(vault, files);
   let moved = 'unchanged';
   const maxTs = Math.max(0, ...[...hits.sent.values(), ...hits.mentions.values()].map((h) => Number(h.ts)));
-  // Unread threads go on the ledger as the Pacific day of their root, so the
+  // Unread threads go on the ledger as the local day of their root, so the
   // next run re-walks just those days; the watermark (advisory) moves on.
-  const dayOfTs = (ts) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Number(ts) * 1000));
+  const dayOfTs = (ts) => dayOf(new Date(Number(ts) * 1000), tz);
   const unreadDays = [...new Set(unread.map((k) => dayOfTs(k.split(':')[1])))].sort();
   writePending(vault, 'slack', unreadDays);
   for (const k of unread.slice(0, 10)) log(`gap: thread not read: ${k} (its day goes on the pending list)`);
@@ -282,4 +280,4 @@ async function syncSlackMcp(run, ctx) {
     { sent: hits.sent.size, mentions: hits.mentions.size, threads: threads.size, unread: unread.length, secrets }, cost);
 }
 
-module.exports = { syncSlackMcp, parseSearch, parseThread, whenOf, pacificMidnight };
+module.exports = { syncSlackMcp, parseSearch, parseThread, whenOf, midnight };

@@ -25,12 +25,15 @@
 const fs = require('fs');
 const path = require('path');
 const { getConfig } = require('./config');
+const T = require('./time');
 const { deltaWalk } = require('./ingest');
 
 const TICK_MS = 5 * 60000;
 const SYNC_ORDER = ['sync-slack', 'sync-gcal', 'sync-linear', 'sync-notion', 'sync-gdrive'];
 
-const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+// Days and morning_at are in the owner's zone, not the Mac's.
+const tzOf = (vault) => getConfig(vault).owner.timezone;
+const localDay = (vault, d = new Date()) => T.dayOf(d, tzOf(vault));
 
 function settings(vault) {
   const b = getConfig(vault).schedule;
@@ -54,12 +57,12 @@ function writeState(vault, s) {
 function nextRun(vault, now = new Date()) {
   const s = settings(vault);
   if (!s.enabled) return null;
-  const [h, m] = s.morningAt.split(':').map(Number);
-  const today = new Date(now); today.setHours(h, m, 0, 0);
-  const done = readState(vault).lastMorning === localDay(now);
-  if (!done && now >= today) return 'on the next tick (due now)';
-  const next = done || now >= today ? new Date(today.getTime() + 864e5) : today;
-  return next.toISOString();
+  const tz = tzOf(vault), day = T.dayOf(now, tz);
+  const due = T.at(day, s.morningAt, tz);
+  const done = readState(vault).lastMorning === day;
+  if (!done && +now >= due) return 'on the next tick (due now)';
+  const next = done || +now >= due ? T.at(T.addDays(day, 1), s.morningAt, tz) : due;
+  return new Date(next).toISOString();
 }
 
 // The chain itself. ctx.runBot(id, body) starts a bot as its own recorded run and
@@ -69,7 +72,7 @@ async function runMorning(run, ctx) {
   const s = settings(vault);
   const st = readState(vault);
   // Mark the day first, so a crash mid-chain does not re-run it every 5 minutes.
-  writeState(vault, { ...st, lastMorning: localDay(), startedAt: new Date().toISOString() });
+  writeState(vault, { ...st, lastMorning: localDay(vault), startedAt: new Date().toISOString() });
   let cost = 0;
   const steps = [];
   const step = async (id, body) => {
@@ -112,9 +115,8 @@ async function runMorning(run, ctx) {
 function isDue(vault, now = new Date()) {
   const s = settings(vault);
   if (!s.enabled) return false;
-  const [h, m] = s.morningAt.split(':').map(Number);
-  const due = new Date(now); due.setHours(h, m, 0, 0);
-  return now >= due && readState(vault).lastMorning !== localDay(now);
+  const tz = tzOf(vault), day = T.dayOf(now, tz);
+  return +now >= T.at(day, s.morningAt, tz) && readState(vault).lastMorning !== day;
 }
 
 // Starts the timer. ctx.startMorning() kicks off the Morning bot unless it is running.

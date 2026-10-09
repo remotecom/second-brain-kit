@@ -10,7 +10,8 @@
 const fs = require('fs');
 const path = require('path');
 const { buildIndex } = require('./route');
-const { readOwner } = require('./config');
+const { readOwner, getConfig } = require('./config');
+const { dayOf } = require('./time');
 const { parseNeedsYou } = require('./verify-bot');
 const { claudeStream } = require('./sync');
 const { splitFrontmatter, fmField } = require('./ingest');
@@ -19,7 +20,7 @@ const SYNTH_BUDGET = 1;
 const PACKET_BYTES = 40000;
 
 const read = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
-const localDate = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const localDate = (vault, d = new Date()) => dayOf(d, getConfig(vault).owner.timezone);
 const ago = (iso) => {
   const h = (Date.now() - Date.parse(iso)) / 36e5;
   return Number.isNaN(h) ? 'never' : h < 1 ? 'just now' : h < 48 ? `${Math.round(h)}h ago` : `${Math.round(h / 24)}d ago`;
@@ -244,7 +245,7 @@ async function synthesize(ctx, packet) {
 
 async function runBrief(run, ctx) {
   const { vault, logLine, finish } = ctx;
-  const today = ctx.today || localDate();
+  const today = ctx.today || localDate(vault);
   const ownerEmail = (ctx.owner && ctx.owner.email) || '';
   let calFile = path.join(vault, 'gcal', `${today}.md`);
   let calNote = '';

@@ -43,7 +43,8 @@ const { syncNotionMcp } = require('./notion-mcp');
 const { syncGcalMcp } = require('./gcal-mcp');
 const { syncGdriveMcp } = require('./gdrive-mcp');
 // Sources synced by "model presses buttons, code writes" (no model-written raw).
-const { readOwner } = require('./config');
+const { readOwner, getConfig } = require('./config');
+const { dayOf } = require('./time');
 const BUTTON_SYNCS = { slack: syncSlackMcp, linear: syncLinearMcp, notion: syncNotionMcp, gcal: syncGcalMcp, gdrive: syncGdriveMcp };
 
 const VAULT = process.env.BRIEFCASE_VAULT || path.join(os.homedir(), 'cursor', 'obsidian');
@@ -228,7 +229,8 @@ const BOTS = [
 const runs = new Map(); // runId -> run (in memory, newest kept per bot)
 let seq = 0;
 
-function localDay(d = new Date()) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+// Today in the owner's zone (config.yaml owner.timezone).
+function localDay(d = new Date()) { return dayOf(d, getConfig(VAULT).owner.timezone); }
 function isRunning(botId) { return [...runs.values()].some((r) => r.bot === botId && r.status === 'running'); }
 
 // Start a bot as its own recorded run and resolve with that run when it ends.

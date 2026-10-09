@@ -4,16 +4,17 @@
 // (a 7:00 AM PT meeting showed as 2:00 PM), and runs blocked asking for Bash to
 // measure description lengths.
 //
-//   range = the rolling window (today + 3 prior, Pacific), 30 days on first run
+//   range = the rolling window (sources.gcal.window_days, owner's days),
+//           bootstrap_days on the first run
 //     ▼
 //   haiku: list_events(calendar, range, DEFAULT only), every page ─▶ raw JSON
 //     ▼
-//   code: drop private + declined (counted), group by Pacific start day,
+//   code: drop private + declined (counted), group by local start day,
 //         render every day in range (quiet days get the declared placeholder)
 //     ▼
 //   sync.verify ─▶ sync.commit (hash skip) ─▶ watermark (max `updated`, advisory)
 //
-// The calendar allowlist is config (config.yaml gcal.calendars), never "every
+// The calendar allowlist is config (sources.gcal.calendars), never "every
 // calendar the account can read": that list includes a personal Gmail calendar
 // and a colleague's calendar (CLAUDE.md, Sync (Google Calendar) step 4).
 
@@ -22,36 +23,25 @@ const path = require('path');
 const { verify, commit } = require('./sync');
 const { collect } = require('./buttons');
 const { getConfig } = require('./config');
+const { dayOf, timeOf, dayStart, offsetAt } = require('./time');
 
 const TOOL = 'mcp__claude_ai_Google_Calendar__list_events';
-const TZ = 'America/Los_Angeles';
 const DAY = 864e5;
-const WINDOW_DAYS = 4;
-const BOOTSTRAP_DAYS = 30;
-const MAX_DESC = 2000;
-
-const pacDay = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
-const pacTime = (d) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' }).format(d);
 const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
-// The Pacific UTC offset at a given day, as "-07:00", for the call's time bounds.
-function pacOffset(day) {
-  const d = new Date(`${day}T12:00:00Z`);
-  const local = new Date(d.toLocaleString('en-US', { timeZone: TZ }));
-  const mins = Math.round((local - new Date(d.toLocaleString('en-US', { timeZone: 'UTC' }))) / 60000);
-  const sign = mins < 0 ? '-' : '+';
-  const a = Math.abs(mins);
-  return `${sign}${String(Math.floor(a / 60)).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`;
-}
+// The owner's UTC offset at local midnight of `day`, as "-07:00", for the
+// call's time bounds.
+const offsetOn = (day, tz) => offsetAt(dayStart(day, tz), tz);
 
 function driveId(url) {
   const m = String(url || '').match(/\/d\/([\w-]{10,})/) || String(url || '').match(/[?&]id=([\w-]{10,})/);
   return m ? m[1] : null;
 }
 
-function renderEvent(e, calendar) {
+// o = { tz, maxDesc }: the owner's zone and the declared description cap.
+function renderEvent(e, calendar, o) {
   const start = e.start || {}, end = e.end || {};
   const when = start.dateTime
-    ? `${pacTime(new Date(start.dateTime))}–${pacTime(new Date(end.dateTime || start.dateTime))}`
+    ? `${timeOf(new Date(start.dateTime), o.tz)}–${timeOf(new Date(end.dateTime || start.dateTime), o.tz)}`
     : 'All day';
   const lines = [`## ${when} · ${e.summary || '(no title)'}`];
   const org = e.organizer || {};
@@ -66,15 +56,15 @@ function renderEvent(e, calendar) {
   }
   let truncated = false;
   let desc = String(e.description || '').trim();
-  if (desc.length > MAX_DESC) { desc = `${desc.slice(0, MAX_DESC)}\n\n[truncated at ${MAX_DESC} chars — full text in the source event]`; truncated = true; }
+  if (desc.length > o.maxDesc) { desc = `${desc.slice(0, o.maxDesc)}\n\n[truncated at ${o.maxDesc} chars — full text in the source event]`; truncated = true; }
   if (desc) lines.push('', desc);
   return { md: lines.join('\n'), truncated };
 }
 
-function renderDay(day, calendars, evs, excluded) {
+function renderDay(day, calendars, evs, excluded, o) {
   const d = new Date(`${day}T12:00:00Z`);
   const title = d.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-  const rendered = evs.map((x) => renderEvent(x.e, x.calendar));
+  const rendered = evs.map((x) => renderEvent(x.e, x.calendar, o));
   const truncated = rendered.some((r) => r.truncated);
   return [
     '---', `date: ${day}`, 'tags: [gcal, daily-sync]', `calendars: [${calendars.join(', ')}]`,
@@ -87,24 +77,27 @@ function renderDay(day, calendars, evs, excluded) {
 async function syncGcalMcp(run, ctx) {
   const { vault, logLine, finish, src } = ctx;
   const log = (s) => logLine(run, s);
-  const calendars = getConfig(vault).sources.gcal.calendars.map(String);
-  if (!calendars.length) return finish(run, 'error', 'set gcal.calendars in config.yaml (the allowlist of calendars to sync)');
+  const cfg = getConfig(vault);
+  const g = cfg.sources.gcal, tz = cfg.owner.timezone;
+  const o = { tz, maxDesc: g.max_description_chars };
+  const calendars = g.calendars.map(String);
+  if (!calendars.length) return finish(run, 'error', 'set sources.gcal.calendars in config.yaml (the allowlist of calendars to sync)');
 
-  const today = pacDay(new Date());
+  const today = dayOf(new Date(), tz);
   let wm = null; try { wm = Date.parse(fs.readFileSync(path.join(vault, 'gcal', '.last-sync'), 'utf8').trim()); } catch {}
   const todayMs = Date.parse(`${today}T00:00:00Z`);
   // An explicit re-sync ("sync gcal since DATE") widens the window; it never narrows it.
   const since = /^\d{4}-\d{2}-\d{2}$/.test((ctx.body || {}).since || '') ? Date.parse(`${ctx.body.since}T00:00:00Z`) : null;
-  let back = Number.isFinite(wm) ? WINDOW_DAYS - 1 : BOOTSTRAP_DAYS - 1;
+  let back = Number.isFinite(wm) ? g.window_days - 1 : cfg.bootstrap_days - 1;
   if (since !== null && since < todayMs) back = Math.max(back, Math.round((todayMs - since) / DAY));
   const days = [];
   for (let t = todayMs - back * DAY; t <= todayMs; t += DAY) days.push(isoDay(t));
   const range = { since: Date.parse(`${days[0]}T00:00:00Z`), today: todayMs, watermark: Number.isFinite(wm) ? wm : null };
-  log(`range ${days[0]} → ${today} (Pacific days)${since !== null ? ' · explicit re-sync' : Number.isFinite(wm) ? '' : ' · first run, 30-day bootstrap'} · calendars: ${calendars.join(', ')}`);
+  log(`range ${days[0]} → ${today} (${tz} days)${since !== null ? ' · explicit re-sync' : Number.isFinite(wm) ? '' : ` · first run, ${cfg.bootstrap_days}-day bootstrap`} · calendars: ${calendars.join(', ')}`);
 
   const tomorrow = isoDay(todayMs + DAY);
   const jobs = calendars.map((c) => ({ args: {
-    calendarId: c, startTime: `${days[0]}T00:00:00${pacOffset(days[0])}`, endTime: `${tomorrow}T00:00:00${pacOffset(tomorrow)}`,
+    calendarId: c, startTime: `${days[0]}T00:00:00${offsetOn(days[0], tz)}`, endTime: `${tomorrow}T00:00:00${offsetOn(tomorrow, tz)}`,
     eventType: ['DEFAULT'], orderBy: 'startTime', pageSize: 250,
   } }));
   const res = await collect(ctx, run, TOOL, jobs, {
@@ -120,7 +113,7 @@ async function syncGcalMcp(run, ctx) {
     for (const e of res.results.get(res.keyOf(job.args)) || []) {
       if (!e || seen.has(e.id) || e.status === 'cancelled') continue;
       seen.add(e.id);
-      const day = e.start && e.start.dateTime ? pacDay(new Date(e.start.dateTime)) : (e.start && e.start.date) || null;
+      const day = e.start && e.start.dateTime ? dayOf(new Date(e.start.dateTime), tz) : (e.start && e.start.date) || null;
       if (!day || !byDay.has(day)) continue;
       const u = Date.parse(e.updated || ''); if (u > maxUpdated) maxUpdated = u;
       const self = (e.attendees || []).find((a) => a.self);
@@ -131,7 +124,7 @@ async function syncGcalMcp(run, ctx) {
     }
   }
   const files = new Map();
-  for (const d of days) files.set(`gcal/${d}.md`, renderDay(d, calendars, byDay.get(d), excluded.get(d)));
+  for (const d of days) files.set(`gcal/${d}.md`, renderDay(d, calendars, byDay.get(d), excluded.get(d), o));
   const ex = [...excluded.values()].reduce((a, x) => ({ private: a.private + x.private, declined: a.declined + x.declined }), { private: 0, declined: 0 });
   log(`${seen.size} event(s) listed · ${kept} kept · excluded ${ex.private} private, ${ex.declined} declined`);
 
@@ -149,4 +142,4 @@ async function syncGcalMcp(run, ctx) {
     { events: kept, excluded: ex, days: days.length }, res.cost);
 }
 
-module.exports = { syncGcalMcp, renderDay, renderEvent, pacOffset };
+module.exports = { syncGcalMcp, renderDay, renderEvent, offsetOn };

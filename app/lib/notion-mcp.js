@@ -20,12 +20,11 @@ const fs = require('fs');
 const path = require('path');
 const { collect } = require('./buttons');
 const { verify, commit } = require('./sync');
-const { requireOwner } = require('./config');
+const { requireOwner, getConfig } = require('./config');
 const { readPending, writePending } = require('./ledger');
 
 const T = (name) => `mcp__claude_ai_Notion__${name}`;
 const DAY = 86400000;
-const WINDOW_DAYS = 4;
 const CATCHALL = ['the', 'a', 'Remote'];
 const COMMENT_TRIES = 3;
 const COMMENTS_UNFETCHED = `_Comments not fetched: the connector returned no result in ${COMMENT_TRIES} consecutive runs._`;
@@ -79,11 +78,13 @@ async function syncNotionMcp(run, ctx) {
   try { owner = requireOwner(vault, ['notion_user_id', 'name']); } catch (e) { return finish(run, 'error', e.message); }
   const me = owner.notion_user_id;
 
+  const cfg = getConfig(vault);
   const now = Date.now();
-  const windowStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate()) - (WINDOW_DAYS - 1) * DAY;
+  const utcToday = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
+  const windowStart = utcToday - (cfg.sources.notion.window_days - 1) * DAY;
   let wm = null;
   try { wm = Date.parse(fs.readFileSync(path.join(vault, 'notion', '.last-sync'), 'utf8').trim()); } catch {}
-  const since = Number.isFinite(wm) ? Math.min(windowStart, wm) : windowStart;
+  const since = Number.isFinite(wm) ? Math.min(windowStart, wm) : utcToday - (cfg.bootstrap_days - 1) * DAY;
   const startDate = new Date(since).toISOString().slice(0, 10);
   log(`edited since ${startDate} · haiku presses buttons, runner writes`);
   let cost = 0;
