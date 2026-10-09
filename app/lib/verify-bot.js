@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
-const { claudeStream } = require('./sync');
+const { claudeCall } = require('./claude-call');
 const { addToIndex } = require('./wiki-index');
 const { script } = require('./kit');
 const { entriesOf, entryKey, splitFrontmatter, fmField } = require('./ingest');
@@ -196,14 +196,10 @@ async function spotCheck(ctx, samples) {
     '', body,
   ].join('\n');
   let calls = 0;
-  const r = await claudeStream(claudeBin, [
-    '-p', prompt, '--model', 'sonnet', '--output-format', 'stream-json', '--verbose',
-    '--allowedTools', 'Read(./wiki/**),Glob,Grep', '--tools', 'Read,Glob,Grep',
-    '--disallowedTools', 'Agent,Task,Write,Edit,NotebookEdit,Bash',
-    '--permission-prompts', 'none', '--setting-sources', 'user',
-    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-    '--max-budget-usd', String(SPOT_BUDGET), '--no-session-persistence',
-  ], { cwd: vault, env, timeoutMs: 15 * 60000, onEvent: (ev) => { if (ev.type === 'assistant') for (const p of (ev.message && ev.message.content) || []) if (p.type === 'tool_use') calls++; } });
+  const r = await claudeCall({ claudeBin, vault, env }, {
+    prompt, model: 'sonnet', allowed: 'Read(./wiki/**),Glob,Grep', budget: SPOT_BUDGET, timeoutMs: 15 * 60000,
+    onEvent: (ev) => { if (ev.type === 'assistant') for (const p of (ev.message && ev.message.content) || []) if (p.type === 'tool_use') calls++; },
+  });
   const p = r.result;
   const cost = (p && p.total_cost_usd) || 0;
   if (!p) return { error: `claude exited ${r.code}`, cost };

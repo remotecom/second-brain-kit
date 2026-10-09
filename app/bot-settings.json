@@ -1,0 +1,17 @@
+{
+  "$comment": "Settings for UNATTENDED bots only (claude -p from the app). Loaded with --setting-sources \"\" so the owner's user, project and local settings, hooks and CLAUDE.md files never apply inside a bot. Each bot names its own tools; this file is the floor under all of them. Interactive sessions use the person's own settings instead.",
+  "disableAllHooks": true,
+  "permissions": {
+    "defaultMode": "default",
+    "deny": [
+      "Bash",
+      "Write",
+      "Edit",
+      "NotebookEdit",
+      "WebFetch",
+      "WebSearch",
+      "Agent",
+      "Task"
+    ]
+  }
+}

@@ -27,7 +27,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
-const { specSection, rulesSection, claudeStream, shortInput } = require('./sync');
+const { specSection, rulesSection, shortInput } = require('./sync');
+const { claudeCall } = require('./claude-call');
 const { readOwner, getConfig } = require('./config');
 const { script } = require('./kit');
 const { dayOf } = require('./time');
@@ -402,27 +403,16 @@ function checkPart(vault, part, mf, pages, applied, misses) {
 async function runPart(ctx, part, k, n) {
   const { run, claudeBin, vault, env, logLine, ownerName, startIso, mutex, date } = ctx;
   const tools = ['Read(./wiki/**)', 'Glob', 'Grep'];
-  const args = (prompt, resume) => [
-    '-p', prompt, '--model', 'sonnet',
-    ...(resume ? ['--resume', resume] : []),
-    '--output-format', 'stream-json', '--verbose',
-    '--allowedTools', tools.join(','),
-    '--tools', 'Read,Glob,Grep',
-    '--disallowedTools', 'Agent,Task,Write,Edit,NotebookEdit,Bash',
-    // No --permission-mode override: the owner's auto mode stays in force.
-    '--permission-prompts', 'none',
-    '--setting-sources', 'user',
-    '--max-budget-usd', String(PART_BUDGET),
-    // No MCP servers. Ingest only reads the wiki, and the connected servers'
-    // tool definitions (~600k tokens, measured 2026-10-02) otherwise ride in
-    // the context of every turn: $1.04 per part with them, $0.22 without.
-    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-  ];
+  // No MCP servers (claudeCall's default). Ingest only reads the wiki, and
+  // the connected servers' tool definitions (~600k tokens, measured
+  // 2026-10-02) otherwise ride in every turn: $1.04 per part with them, $0.22
+  // without. persist: the session must survive for the repair --resume.
+  const opts = (prompt, resume) => ({ prompt, model: 'sonnet', resume, persist: true, allowed: tools, budget: PART_BUDGET });
   let calls = 0;
   const call = async (prompt, resume) => {
     const texts = [];
-    const r = await claudeStream(claudeBin, args(prompt, resume), {
-      cwd: vault, env, timeoutMs: 30 * 60000,
+    const r = await claudeCall({ claudeBin, vault, env }, {
+      ...opts(prompt, resume), timeoutMs: 30 * 60000,
       onEvent: (ev) => {
         if (ev.type !== 'assistant') return;
         for (const p of (ev.message && ev.message.content) || []) {

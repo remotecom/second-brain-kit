@@ -6,7 +6,7 @@
 // can't summarize, invent, or substitute content (2026-10-01).
 
 const fs = require('fs');
-const { claudeStream } = require('./sync');
+const { claudeCall } = require('./claude-call');
 
 // Claude Code moves a tool result over ~50KB out of the conversation and hands
 // the model a "<persisted-output> ... saved to: <path>" stub instead. The full
@@ -32,18 +32,12 @@ function resolvePersisted(text) {
 // (tool input, tool result text) pair seen in the stream.
 async function pressButtons(ctx, run, instructions, budget, tools) {
   const calls = new Map(); // tool_use_id -> { name, input, text }
-  const r = await claudeStream(ctx.claudeBin, [
-    '-p', instructions,
-    '--model', 'haiku',
-    '--output-format', 'stream-json', '--verbose',
-    '--tools', 'ToolSearch',                         // no Bash/Read/Write at all
-    '--allowedTools', ['ToolSearch', ...tools].join(','),
-    '--permission-prompts', 'none',
-    '--setting-sources', 'user',
-    '--max-budget-usd', String(budget),
-    '--no-session-persistence',
-  ], {
-    cwd: ctx.vault, env: ctx.env, timeoutMs: 30 * 60000,
+  const r = await claudeCall(ctx, {
+    prompt: instructions, model: 'haiku',
+    tools: 'ToolSearch',                             // no Bash/Read/Write at all
+    allowed: ['ToolSearch', ...tools],
+    mcp: true,                                       // the connector's buttons
+    budget, timeoutMs: 30 * 60000,
     onEvent: (ev) => {
       const parts = (ev.message && ev.message.content) || [];
       if (ev.type === 'assistant') {

@@ -44,13 +44,14 @@ const { syncGcalMcp } = require('./gcal-mcp');
 const { syncGdriveMcp } = require('./gdrive-mcp');
 // Sources synced by "model presses buttons, code writes" (no model-written raw).
 const { readOwner, getConfig } = require('./config');
+const { botArgs, botEnv } = require('./claude-call');
+const { script } = require('./kit');
 const { dayOf } = require('./time');
 const BUTTON_SYNCS = { slack: syncSlackMcp, linear: syncLinearMcp, notion: syncNotionMcp, gcal: syncGcalMcp, gdrive: syncGdriveMcp };
 
 const VAULT = process.env.BRIEFCASE_VAULT || path.join(os.homedir(), 'cursor', 'obsidian');
 const STATE_DIR = process.env.BRIEFCASE_STATE_DIR || path.join(os.homedir(), '.second-brain');
 const CHAT_CWD = path.join(STATE_DIR, 'brain-cwd');
-const EMPTY_MCP = path.join(STATE_DIR, 'no-mcp.json');
 const RUNS_DIR = path.join(VAULT, '.bot', 'runs');
 
 const CHAT_MODELS = new Set(['haiku', 'sonnet']);
@@ -69,15 +70,9 @@ Answer questions from it, and ONLY from it. How to navigate:
 Rules: be brief and concrete; lead with the answer; say plainly when the vault doesn't know. You are read-only. You only see the vault, never a live system, so mention dates when freshness matters.`;
 
 fs.mkdirSync(CHAT_CWD, { recursive: true });
-try { fs.writeFileSync(EMPTY_MCP, '{"mcpServers":{}}'); } catch {}
 
-function claudeEnv() {
-  // A stale ANTHROPIC_API_KEY in the environment beats the claude.ai login
-  // and 401s (lib/topic.js). Strip it so the subscription login is used.
-  const env = { ...process.env };
-  delete env.ANTHROPIC_API_KEY;
-  return env;
-}
+// A stale ANTHROPIC_API_KEY beats the claude.ai login and 401s; botEnv strips it.
+const claudeEnv = () => botEnv();
 
 // Run `claude -p` and resolve with its parsed --output-format json result.
 // stdin is closed on purpose: an open stdin makes -p print a "no stdin data"
@@ -108,18 +103,11 @@ function claudeJSON(claudeBin, args, { cwd, timeoutMs, onLine } = {}) {
 
 async function chat(claudeBin, { message, sessionId, model }) {
   const m = CHAT_MODELS.has(model) ? model : 'haiku';
-  const args = [
-    '-p', String(message).slice(0, 8000),
-    '--model', m,
-    '--output-format', 'json',
-    '--mcp-config', EMPTY_MCP, '--strict-mcp-config',
-    '--add-dir', VAULT,
-    '--allowedTools', 'Read,Grep,Glob',
-    '--permission-prompts', 'none',
-    '--append-system-prompt', CHAT_PROMPT,
-    '--max-budget-usd', CHAT_BUDGET_USD,
-  ];
-  if (sessionId && /^[0-9a-f-]{36}$/.test(sessionId)) args.push('--resume', sessionId);
+  const args = botArgs({
+    prompt: String(message).slice(0, 8000), model: m, format: 'json', persist: true,
+    resume: sessionId && /^[0-9a-f-]{36}$/.test(sessionId) ? sessionId : undefined,
+    budget: CHAT_BUDGET_USD, extra: ['--add-dir', VAULT, '--append-system-prompt', CHAT_PROMPT],
+  });
   const r = await claudeJSON(claudeBin, args, { cwd: CHAT_CWD });
   const p = r.parsed;
   if (!p) return { error: `claude returned no result (exit ${r.code}). ${r.stderr || r.raw}`.trim(), ms: r.ms };
@@ -161,25 +149,21 @@ const BOTS = [
   },
   {
     id: 'lint', name: 'Lint', kind: 'bash',
-    blurb: 'Dead links, raw purity and annotations in raw. A vault script, no tokens.',
-    run: (run) => runScript(run, path.join(VAULT, 'docs', 'audits', 'linkrot-lint.sh'), summarizeLint),
+    blurb: 'Dead links, raw purity and annotations in raw. A kit script, no tokens.',
+    run: (run) => runScript(run, script('linkrot-lint.sh'), summarizeLint),
   },
   {
     id: 'deltas', name: 'Deltas', kind: 'bash',
     blurb: 'What changed since the last ingest, per source. No tokens.',
-    run: (run) => runScript(run, path.join(VAULT, 'docs', 'audits', 'delta-walk.sh'), summarizeDeltas),
+    run: (run) => runScript(run, script('delta-walk.sh'), summarizeDeltas),
   },
   // One sync bot per source, so each can be run and watched on its own.
-  ...Object.entries(sync.SOURCES).map(([key, src]) => (BUTTON_SYNCS[key] ? {
+  ...Object.entries(sync.SOURCES).map(([key, src]) => ({
     // The model only presses the connector's buttons; the runner picks every
-    // call and writes the files (lib/{slack,linear,notion}-mcp.js).
+    // call and writes the files (lib/<source>-mcp.js).
     id: `sync-${key}`, name: `Sync ${src.name}`, kind: 'model',
     blurb: `${src.name} via the claude.ai connector. Haiku calls the tools; code writes the files, so nothing in raw is model-written.`,
     run: (run, claudeBin, body = {}) => BUTTON_SYNCS[key](run, { claudeBin, vault: VAULT, env: claudeEnv(), logLine, finish, src, body }),
-  } : {
-    id: `sync-${key}`, name: `Sync ${src.name}`, kind: 'model',
-    blurb: `Pull new ${src.name} data since the watermark (at least the last ${src.windowDays || 4} days). Budget $${src.budget}.`,
-    run: (run, claudeBin) => sync.runSync(run, { claudeBin, vault: VAULT, env: claudeEnv(), logLine, finish }, key),
   })),
   {
     id: 'verify', name: 'Verify', kind: 'model',
@@ -287,11 +271,10 @@ async function runHealth(run, claudeBin) {
   const names = Object.entries(HEALTH_TOOLS).map(([k, t]) => `${k}: ${t}`).join('\n');
   const prompt = `Health probe. For each source below, call its tool exactly once with minimal arguments (Slack: user_id ${readOwner(VAULT).slack_user_id || 'unknown'}, response_format concise. Notion: query "a", page_size 1. Drive: pageSize 1). Call nothing else except ToolSearch if a schema needs loading. Do not print any personal data.\n${names}\nReply with ONLY a JSON object: for each source {"status": one of ok | auth (the service said you are not authenticated) | missing (tool not available) | error, "reason": "under 12 words"}.`;
   logLine(run, 'probing 5 connectors (haiku)…');
-  const r = await claudeJSON(claudeBin, [
-    '-p', prompt, '--model', 'haiku', '--output-format', 'json',
-    '--allowedTools', ['ToolSearch', ...Object.values(HEALTH_TOOLS)].join(','),
-    '--permission-prompts', 'none', '--max-budget-usd', '0.50', '--no-session-persistence',
-  ], { cwd: CHAT_CWD, timeoutMs: 240000 });
+  const r = await claudeJSON(claudeBin, botArgs({
+    prompt, model: 'haiku', format: 'json', tools: 'ToolSearch', mcp: true,
+    allowed: ['ToolSearch', ...Object.values(HEALTH_TOOLS)], budget: 0.5,
+  }), { cwd: CHAT_CWD, timeoutMs: 240000 });
   const p = r.parsed;
   if (!p) return finish(run, 'error', `claude gave no result (exit ${r.code})`, { stderr: r.stderr });
   const m = String(p.result || '').match(/\{[\s\S]*\}/);
@@ -317,8 +300,8 @@ async function runHealth(run, claudeBin) {
 function runScript(run, script, summarize) {
   return new Promise((resolve) => {
     if (!fs.existsSync(script)) { finish(run, 'error', `missing ${script}`); return resolve(); }
-    logLine(run, `bash ${path.relative(VAULT, script)}`);
-    const child = spawn('/bin/bash', [script], { cwd: VAULT, stdio: ['ignore', 'pipe', 'pipe'] });
+    logLine(run, `bash ${path.basename(script)} --vault ${VAULT}`);
+    const child = spawn('/bin/bash', [script, '--vault', VAULT], { cwd: VAULT, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.on('data', (c) => { out += c; });
     child.stderr.on('data', (c) => { out += c; });

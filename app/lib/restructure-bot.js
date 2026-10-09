@@ -25,7 +25,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { claudeStream } = require('./sync');
+const { claudeCall } = require('./claude-call');
 const { splitFrontmatter } = require('./ingest');
 const { addToIndex } = require('./wiki-index');
 
@@ -175,14 +175,10 @@ async function stage(run, ctx, rel) {
   // The model's three sections.
   const prompt = SYNTH(name, histRel, today, [...histHeads]) + body;
   log(`asking opus for Current state / Timeline / Open questions (${Math.round(prompt.length / 1024)}KB in)…`);
-  const r = await claudeStream(ctx.claudeBin, [
-    '-p', prompt, '--model', 'opus', '--output-format', 'stream-json', '--verbose',
-    '--tools', 'Read,Grep,Glob', '--allowedTools', 'Read(./wiki/**),Grep,Glob',
-    '--disallowedTools', 'Agent,Task,Write,Edit,NotebookEdit,Bash',
-    '--permission-prompts', 'none', '--setting-sources', 'user',
-    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-    '--max-budget-usd', String(BUDGET), '--no-session-persistence',
-  ], { cwd: vault, env: ctx.env, timeoutMs: 20 * 60000, onEvent: () => {} });
+  const r = await claudeCall({ claudeBin: ctx.claudeBin, vault, env: ctx.env }, {
+    prompt, model: 'opus', tools: 'Read,Grep,Glob', allowed: 'Read(./wiki/**),Grep,Glob',
+    budget: BUDGET, timeoutMs: 20 * 60000,
+  });
   const p = r.result;
   const cost = (p && p.total_cost_usd) || 0;
   if (!p) throw Object.assign(new Error(`claude exited ${r.code}`), { cost });

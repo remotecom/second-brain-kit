@@ -18,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const { parseNeedsYou, renderNeedsYou, appliedIds } = require('./verify-bot');
 const { parseBlocks, applyBlocks, stampFrontmatter } = require('./ingest');
-const { claudeStream } = require('./sync');
+const { claudeCall } = require('./claude-call');
 
 const ITEM_BUDGET = 1;
 const RUN_BUDGET = 6;
@@ -58,14 +58,10 @@ function contradictionPrompt(item, verdict, today) {
 async function resolveContradiction(ctx, item, verdict) {
   const { claudeBin, vault, env } = ctx;
   const today = new Date().toISOString().slice(0, 10);
-  const r = await claudeStream(claudeBin, [
-    '-p', contradictionPrompt(item, verdict, today), '--model', 'sonnet', '--output-format', 'stream-json', '--verbose',
-    '--allowedTools', 'Read,Glob,Grep', '--tools', 'Read,Glob,Grep',
-    '--disallowedTools', 'Agent,Task,Write,Edit,NotebookEdit,Bash',
-    '--permission-prompts', 'none', '--setting-sources', 'user',
-    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-    '--max-budget-usd', String(ITEM_BUDGET), '--no-session-persistence',
-  ], { cwd: vault, env, timeoutMs: 10 * 60000, onEvent: () => {} });
+  const r = await claudeCall({ claudeBin, vault, env }, {
+    prompt: contradictionPrompt(item, verdict, today), model: 'sonnet',
+    budget: ITEM_BUDGET, timeoutMs: 10 * 60000,
+  });
   const p = r.result;
   const cost = (p && p.total_cost_usd) || 0;
   if (!p) return { error: `claude exited ${r.code}`, cost };

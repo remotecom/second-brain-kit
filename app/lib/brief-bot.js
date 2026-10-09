@@ -13,7 +13,7 @@ const { buildIndex } = require('./route');
 const { readOwner, getConfig } = require('./config');
 const { dayOf } = require('./time');
 const { parseNeedsYou } = require('./verify-bot');
-const { claudeStream } = require('./sync');
+const { claudeCall } = require('./claude-call');
 const { splitFrontmatter, fmField } = require('./ingest');
 
 const SYNTH_BUDGET = 1;
@@ -225,14 +225,10 @@ function checkCites(vault, text) {
 
 async function synthesize(ctx, packet) {
   const { claudeBin, vault, env, logLine, run } = ctx;
-  const r = await claudeStream(claudeBin, [
-    '-p', `${BRIEF_RULES}\n\n${packet}`, '--model', 'sonnet', '--output-format', 'stream-json', '--verbose',
-    '--allowedTools', 'Read(./wiki/**),Glob,Grep', '--tools', 'Read,Glob,Grep',
-    '--disallowedTools', 'Agent,Task,Write,Edit,NotebookEdit,Bash',
-    '--permission-prompts', 'none', '--setting-sources', 'user',
-    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-    '--max-budget-usd', String(SYNTH_BUDGET), '--no-session-persistence',
-  ], { cwd: vault, env, timeoutMs: 10 * 60000, onEvent: () => {} });
+  const r = await claudeCall({ claudeBin, vault, env }, {
+    prompt: `${BRIEF_RULES}\n\n${packet}`, model: 'sonnet',
+    allowed: 'Read(./wiki/**),Glob,Grep', budget: SYNTH_BUDGET, timeoutMs: 10 * 60000,
+  });
   const p = r.result;
   const cost = (p && p.total_cost_usd) || 0;
   if (!p) return { error: `claude exited ${r.code}`, cost };

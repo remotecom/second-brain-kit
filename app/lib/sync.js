@@ -18,14 +18,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
 
 const DAY = 86400000;
 const WINDOW_DAYS = 4; // default rolling window; a source can override with windowDays
-
-// jq is for reading the big tool results the CLI spills to disk. No python:
-// it can write anywhere, which would make the Write(<dir>/**) scope meaningless.
-const READ_ONLY_BASH = ['date', 'shasum', 'stat', 'ls', 'wc', 'jq', 'head'].map((c) => `Bash(${c}:*)`);
 
 const SOURCES = {
   slack: {
@@ -97,7 +92,7 @@ const SOURCES = {
 const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 
 // Pull one "### <title>" section out of the vault's CLAUDE.md, up to the next
-// "### " heading. Bots run with --setting-sources user, which does NOT load the
+// "### " heading. Bots run with no setting sources, which does NOT load the
 // project CLAUDE.md, so the op spec is handed over in the prompt instead. That
 // is also ~10x fewer tokens than the whole 1000-line file.
 function specSection(vault, title) {
@@ -133,65 +128,9 @@ function rangeFor(vault, src, nowMs) {
   return { since, today, windowStart, watermark: wm };
 }
 
-function promptFor(vault, src, startIso, range) {
-  const spec = [src.section, ...(src.also || [])].map((t) => specSection(vault, t)).join('\n\n');
-  return [
-    `You are the vault's ${src.name} sync bot, running unattended. Your working directory is the vault root.`,
-    `Do the "${src.section}" operation below exactly as written, every step and every rule, with these overrides:`,
-    `- Time: START is ${startIso}. Treat it as "now"; do not run date to derive a different one.`,
-    `- Range: fetch ${isoDay(range.since)} through ${isoDay(range.today)} inclusive (UTC). This already accounts for the rolling window and the watermark.`,
-    `- Tools: this is a headless runtime. ${src.rename} Load schemas with ToolSearch.`,
-    '- YOU CANNOT WRITE FILES. You have no Write/Edit tools. To write a file, put its COMPLETE content in your reply text as a block, exactly like this:',
-    `    <<<FILE ${src.dir}/<path>`,
-    '    <the full file content, verbatim>',
-    '    <<<END>>>',
-    '  Emit each block as soon as you have that file\'s content, in the same message as your next tool call. Do not save them all for the end: a single message has an output limit. Emit a file once; if you must correct it, emit it again and the last copy wins. The runner checks every block and writes them only if the whole run passes, and it does the content-hash skip itself, so emit every in-scope file even if you think it is unchanged.',
-    `- Every block path must be inside ${src.dir}/. Include state files the op maintains (e.g. ${src.dir}/.state.json) as blocks too. Never emit ${src.dir}/.last-sync, wiki/log.md or anything outside ${src.dir}/; the runner owns the watermark.`,
-    '- RAW PURITY and NO ANNOTATIONS IN RAW apply to every block.',
-    '- Read only: never send, post, create, update or delete anything in any source system. Bash is limited to read-only helpers (jq, head, ls, stat, wc, shasum, date).',
-    src.extra ? `- ${src.extra}` : '',
-    'Finish your reply with exactly one line, and nothing after it:',
-    'MANIFEST: {"complete":<true only if you fetched EVERY in-scope item for the range; false if anything was left unfetched for any reason>,"emitted":["<every path you emitted a FILE block for>"],"max_ts":"<newest source timestamp seen, ISO-8601 UTC>","counts":{"<name>":<n>},"gaps":["<anything you could not fetch or finish>"]}',
-    '',
-    '================ THE OPERATION (from the vault CLAUDE.md) ================',
-    spec,
-    '',
-    '================ VAULT RULES (from the vault CLAUDE.md) ================',
-    rulesSection(vault),
-  ].filter((l) => l !== null && l !== undefined && l !== false).join('\n');
-}
-
 function shortInput(input) {
   const s = JSON.stringify(input || {});
   return s.length > 110 ? `${s.slice(0, 107)}…` : s;
-}
-
-// Run claude with stream-json so each tool call shows up in the board's log
-// as it happens. Resolves with the final result event.
-function claudeStream(claudeBin, args, { cwd, env, timeoutMs, onEvent }) {
-  return new Promise((resolve) => {
-    const child = spawn(claudeBin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
-    let buf = '', result = null, err = '';
-    child.stdout.on('data', (c) => {
-      buf += c;
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i); buf = buf.slice(i + 1);
-        if (!line.startsWith('{')) continue;
-        let ev; try { ev = JSON.parse(line); } catch { continue; }
-        if (ev.type === 'result') result = ev; else onEvent(ev);
-      }
-    });
-    child.stderr.on('data', (c) => { err += c; });
-    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, result, stderr: err.slice(-2000) }); });
-  });
-}
-
-function parseManifest(text) {
-  const m = String(text || '').match(/MANIFEST:\s*(\{[\s\S]*\})\s*$/);
-  if (!m) return null;
-  try { return JSON.parse(m[1]); } catch { return null; }
 }
 
 // Content check, borrowed from linkrot-lint section 6. These shapes are a
@@ -200,16 +139,6 @@ function parseManifest(text) {
 // logged: the owner's own messages sometimes use it, so it's too noisy to block on.
 const STANDIN_RE = /\((see|captured|full thread) (Sent|Mentions|above|below)|[0-9]+-reply thread|[0-9]+\+? (more|further|remaining) (replies|messages)/;
 const ITALIC_RE = /_\([^)]{8,}\)_/;
-
-const FILE_RE = /<<<FILE ([^\n]+)\n([\s\S]*?)\n?<<<END>>>/g;
-
-// Collect every FILE block the model emitted across the whole run. Last copy
-// of a path wins, so the model can correct a file by re-emitting it.
-function collectFiles(texts) {
-  const files = new Map();
-  for (const t of texts) for (const m of t.matchAll(FILE_RE)) files.set(m[1].trim().replace(/^\.\//, ''), m[2].endsWith('\n') ? m[2] : `${m[2]}\n`);
-  return files;
-}
 
 // The verification gate, run on the emitted files BEFORE anything touches
 // disk. Returns { problems, notes }; no problems = pass.
@@ -259,133 +188,4 @@ function commit(vault, files) {
   return { written, skipped };
 }
 
-// One claude run over one date range. The model gets NO write tools: it
-// emits FILE blocks and the runner writes them. Measured 2026-10-01: with
-// Edit(<dir>/**) granted, real sync runs still had writes denied by a rule
-// that never reproduced in isolation (5 tries). Taking file writes away from
-// the model removes that whole class of failure, and puts the "only inside
-// its own folder" rule in code instead of in permission patterns.
-async function runOnce(run, ctx, src, range, budget) {
-  const { claudeBin, vault, env, logLine } = ctx;
-  const startIso = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
-  const tools = ['ToolSearch', 'Read', 'Glob', 'Grep', ...READ_ONLY_BASH, ...src.tools];
-  let toolCalls = 0, blocks = 0;
-  const texts = [];
-  const r = await claudeStream(claudeBin, [
-    '-p', promptFor(vault, src, startIso, range),
-    '--model', src.model || 'sonnet',
-    '--output-format', 'stream-json', '--verbose',
-    '--allowedTools', tools.join(','),
-    '--disallowedTools', 'Agent,Task,Write,Edit,NotebookEdit',
-    // No --permission-mode override: the owner's auto mode stays in force
-    // inside bots. Bots no longer write files (the runner does), so the
-    // classifier has no writes to veto. dontAsk was removed 2026-10-01 after
-    // the classifier rightly flagged it as bypassing auto mode.
-    '--permission-prompts', 'none',
-    // Only user settings: the vault's own .claude/settings.local.json allows
-    // python3 and more, and project settings ADD to --allowedTools rather than
-    // being replaced by it (seen on the first Calendar run, 2026-10-01).
-    '--setting-sources', 'user',
-    '--max-budget-usd', String(budget),
-    '--no-session-persistence',
-  ], {
-    cwd: vault, env, timeoutMs: 45 * 60000,
-    onEvent: (ev) => {
-      if (ev.type !== 'assistant') return;
-      for (const part of (ev.message && ev.message.content) || []) {
-        if (part.type === 'text' && part.text) {
-          texts.push(part.text);
-          for (const m of part.text.matchAll(FILE_RE)) { blocks++; logLine(run, `▣ ${m[1].trim()} (${m[2].length} chars)`); }
-        }
-        if (part.type !== 'tool_use') continue;
-        toolCalls++;
-        logLine(run, `→ ${part.name.replace(/^mcp__claude_ai_[A-Za-z_]+__/, '')} ${shortInput(part.input)}`);
-      }
-    },
-  });
-  const p = r.result;
-  if (!p) return { cost: 0, problems: [`claude exited ${r.code} with no result`], toolCalls };
-  const cost = p.total_cost_usd || 0;
-  if (p.subtype === 'error_max_budget_usd') return { cost, problems: [`hit the $${budget} budget after ${toolCalls} tool calls; nothing written`], toolCalls };
-  // The final result text is also the last assistant message; dedupe by
-  // collecting into a Map (last copy wins) rather than counting twice.
-  const files = collectFiles([...texts, p.result || '']);
-  const manifest = parseManifest(p.result);
-  if (!manifest) return { cost, problems: ['no MANIFEST line in the reply; nothing written'], toolCalls };
-
-  const { problems, notes } = verify(vault, src, manifest, files, range);
-  for (const d of p.permission_denials || []) {
-    const i = d.tool_input || {};
-    notes.push(`denied ${d.tool_name}: ${shortInput(i.file_path || i.command || i)}`);
-  }
-  const deniedSource = [...new Set((p.permission_denials || []).map((d) => d.tool_name).filter((t) => t.startsWith('mcp__')))];
-  if (deniedSource.length) problems.push(`source tools denied: ${deniedSource.join(', ')}`);
-  if (!files.size && !(manifest.gaps || []).length) notes.push('no files emitted and no gaps reported');
-  if (problems.length) return { cost, manifest, problems, notes, toolCalls, emitted: files.size };
-
-  const { written, skipped } = commit(vault, files);
-  logLine(run, `committed: ${written} written, ${skipped} unchanged (hash skip)`);
-  return { cost, manifest, problems, notes, toolCalls, emitted: files.size, written, skipped };
-}
-
-// Split a long catch-up into sequential windows, so one run never has to hold
-// 11 days of Slack (measured 2026-10-01: an 11-day single run spent $10.57 and
-// still dropped days). Sequential, not parallel: no two agents race a file.
-function chunksOf(range, days) {
-  if (!days) return [range];
-  const out = [];
-  for (let s = range.since; s <= range.today; s += days * DAY) {
-    out.push({ ...range, since: s, today: Math.min(range.today, s + (days - 1) * DAY) });
-  }
-  return out;
-}
-
-async function runSync(run, ctx, key) {
-  const { vault, logLine, finish } = ctx;
-  const src = SOURCES[key];
-  const range = rangeFor(vault, src, Date.now());
-  const chunks = chunksOf(range, src.chunkDays);
-  logLine(run, `range ${isoDay(range.since)} → ${isoDay(range.today)}  (watermark ${range.watermark ? new Date(range.watermark).toISOString() : 'none'})`);
-  logLine(run, `model ${src.model || 'sonnet'} · ${chunks.length} chunk(s) · budget $${src.budget} each`);
-
-  let cost = 0, written = 0, maxTs = null, toolCalls = 0, allComplete = true;
-  const gaps = [], counts = {};
-  for (const [i, ch] of chunks.entries()) {
-    if (chunks.length > 1) logLine(run, `── chunk ${i + 1}/${chunks.length}: ${isoDay(ch.since)} → ${isoDay(ch.today)}`);
-    const r = await runOnce(run, ctx, src, ch, src.budget);
-    cost += r.cost; toolCalls += r.toolCalls; written += r.written || 0;
-    for (const n of r.notes || []) logLine(run, `note: ${n}`);
-    if (r.manifest) {
-      for (const g of r.manifest.gaps || []) { gaps.push(g); logLine(run, `gap: ${g}`); }
-      for (const [k, v] of Object.entries(r.manifest.counts || {})) counts[k] = (typeof v === 'number' ? (counts[k] || 0) + v : v);
-      if (r.manifest.complete !== true) allComplete = false;
-      const t = Date.parse(r.manifest.max_ts);
-      if (Number.isFinite(t) && (!maxTs || t > maxTs)) maxTs = t;
-    }
-    for (const pr of r.problems) logLine(run, `GATE: ${pr}`);
-    if (r.problems.length) {
-      // Stop at the first failed chunk: later chunks would be wasted spend,
-      // and the watermark can't move past a hole anyway.
-      return finish(run, 'error', `chunk ${i + 1}/${chunks.length} failed the gate (${r.problems.length}); its files NOT written, watermark NOT moved`,
-        { range, chunk: i + 1, problems: r.problems, toolCalls }, cost);
-    }
-  }
-
-  // Every chunk passed: the runner, not the model, moves the watermark. Forward
-  // only, and only if every chunk says it fetched everything. The verified
-  // files are kept either way; an incomplete run just leaves the watermark
-  // where it was, so the next run still reaches the items it missed.
-  // (2026-10-01: Drive ran out of budget with 6 files unfetched and said so in
-  // prose only; the runner moved the watermark past them.)
-  let moved = 'unchanged';
-  if (!allComplete) moved = 'HELD (run reported incomplete)';
-  else if (maxTs && (!range.watermark || maxTs > range.watermark)) {
-    fs.writeFileSync(path.join(vault, src.dir, '.last-sync'), `${new Date(maxTs).toISOString().replace(/\.\d+Z$/, 'Z')}\n`);
-    moved = `→ ${new Date(maxTs).toISOString().slice(0, 16)}Z`;
-  }
-  const c = Object.entries(counts).filter(([, v]) => typeof v === 'number').slice(0, 4).map(([k, v]) => `${k} ${v}`).join(', ');
-  finish(run, gaps.length || !allComplete ? 'warn' : 'ok', `${written} written${c ? ` (${c})` : ''} · watermark ${moved}${gaps.length ? ` · ${gaps.length} gap(s)` : ''}`,
-    { range, chunks: chunks.length, counts, gaps, toolCalls }, cost);
-}
-
-module.exports = { SOURCES, runSync, specSection, rulesSection, claudeStream, shortInput, collectFiles, verify, commit, rangeFor };
+module.exports = { SOURCES, specSection, rulesSection, shortInput, verify, commit, rangeFor };
