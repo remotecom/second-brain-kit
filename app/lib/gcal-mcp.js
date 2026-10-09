@@ -24,8 +24,8 @@ const { verify, commit } = require('./sync');
 const { collect } = require('./buttons');
 const { getConfig } = require('./config');
 const { dayOf, timeOf, dayStart, offsetAt } = require('./time');
+const { tool } = require('./connectors');
 
-const TOOL = 'mcp__claude_ai_Google_Calendar__list_events';
 const DAY = 864e5;
 const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 // The owner's UTC offset at local midnight of `day`, as "-07:00", for the
@@ -77,6 +77,7 @@ function renderDay(day, calendars, evs, excluded, o) {
 async function syncGcalMcp(run, ctx) {
   const { vault, logLine, finish, src } = ctx;
   const log = (s) => logLine(run, s);
+  const TOOL = tool(vault, 'gcal', 'list_events');
   const cfg = getConfig(vault);
   const g = cfg.sources.gcal, tz = cfg.owner.timezone;
   const o = { tz, maxDesc: g.max_description_chars };

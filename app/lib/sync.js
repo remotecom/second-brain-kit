@@ -20,73 +20,17 @@ const fs = require('fs');
 const path = require('path');
 
 const DAY = 86400000;
-const WINDOW_DAYS = 4; // default rolling window; a source can override with windowDays
+const WINDOW_DAYS = 4; // default rolling window; a caller can pass src.windowDays
 
+// The five sources the app syncs. Each sync is code-backed (lib/<key>-mcp.js):
+// the model only presses the connector's buttons and code writes raw.
+// dayFiles = one file per day under dir/ (the verify gate checks every day).
 const SOURCES = {
-  slack: {
-    name: 'Slack',
-    section: 'Sync (Slack)',
-    dir: 'slack',
-    dayFiles: true,
-    // Per chunk. $4 for an 11-day single run was too small (2026-10-01), and
-    // $12 still dropped days; 4-day chunks keep each run the size of a normal
-    // daily sync.
-    budget: 5,
-    chunkDays: 3,
-    windowDays: 2, // vault spec, 2026-10-01: lean daily Slack
-    // Haiku was tried and can't follow this spec (2026-10-01: 19 tool calls,
-    // no thread expansion, no MANIFEST, tried to emit .last-sync). Sonnet only.
-    rename: 'Wherever the spec names a tool mcp__plugin_slack_slack__<tool>, call mcp__claude_ai_Slack__<tool> instead.',
-    // Each line answers a shortcut the first run actually took.
-    extra: [
-      'Run BOTH searches from step 3, sent messages AND mentions, across the whole range. Both are mandatory.',
-      'Step 4: call slack_read_thread for every root with replies, then follow the posted-vs-mention-only rule in step 4 exactly. Full thread where the owner posted; root + mention + last 5 replies plus the exact declared placeholder line where they did not. Never write a reply count or summary in place of replies.',
-      'Write a file for EVERY day in the range, even a quiet one (use the declared placeholder _No messages._ under each empty section). Always rewrite from source; never keep an existing file because it looks richer.',
-      'Search pages are large: request the fewest fields the spec allows and paginate to exhaustion. If you get page_limit_exceeded, split the range into smaller date windows rather than stopping.',
-      'Declared exception to verbatim: if a message contains a password, API key or token, write [credential redacted by sync] in its place, and list the permalink in gaps.',
-    ].join(' '),
-    tools: ['slack_search_public_and_private', 'slack_read_thread', 'slack_read_channel', 'slack_read_user_profile', 'slack_search_users']
-      .map((t) => `mcp__claude_ai_Slack__${t}`),
-  },
-  gcal: {
-    name: 'Calendar',
-    section: 'Sync (Google Calendar)',
-    also: ['Sensitivity denylist (Google sources)'],
-    dir: 'gcal',
-    dayFiles: true,
-    budget: 2,
-    rename: 'Tool names in the spec are already correct for this runtime (mcp__claude_ai_Google_Calendar__*).',
-    tools: ['list_calendars', 'list_events', 'get_event'].map((t) => `mcp__claude_ai_Google_Calendar__${t}`),
-  },
-  gdrive: {
-    name: 'Drive',
-    section: 'Sync (Google Drive)',
-    also: ['Sensitivity denylist (Google sources)'],
-    dir: 'gdrive',
-    // $3 ran out with 6 files unfetched on 2026-10-01 (bodies are big).
-    budget: 5,
-    rename: 'Tool names in the spec are already correct for this runtime (mcp__claude_ai_Google_Drive__*).',
-    tools: ['search_files', 'list_recent_files', 'get_file_metadata', 'read_file_content'].map((t) => `mcp__claude_ai_Google_Drive__${t}`),
-  },
-  notion: {
-    name: 'Notion',
-    section: 'Sync (Notion)',
-    dir: 'notion',
-    budget: 6,
-    rename: 'Wherever the spec names a tool mcp__plugin_Notion_notion__<tool>, call mcp__claude_ai_Notion__<tool> instead.',
-    tools: ['notion-search', 'notion-fetch', 'notion-get-comments', 'notion-query-data-sources', 'notion-get-users']
-      .map((t) => `mcp__claude_ai_Notion__${t}`),
-  },
-  linear: {
-    name: 'Linear',
-    section: 'Sync (Linear)',
-    dir: 'linear',
-    budget: 8,
-    rename: 'Wherever the spec names a tool mcp__plugin_linear_linear__<tool> or mcp__claude_ai_Linear__<tool>, call mcp__claude_ai_Linear__<tool>.',
-    extra: 'Reuse linear/.initiative-scope.json as-is even if it is older than 7 days (a rescope is a separate run). If its project_count is below 150, stop and report that in gaps instead of syncing.',
-    tools: ['list_projects', 'get_project', 'list_issues', 'get_issue', 'list_comments', 'get_initiative', 'list_documents', 'get_document']
-      .map((t) => `mcp__claude_ai_Linear__${t}`),
-  },
+  slack: { name: 'Slack', dir: 'slack', dayFiles: true },
+  gcal: { name: 'Calendar', dir: 'gcal', dayFiles: true },
+  gdrive: { name: 'Drive', dir: 'gdrive' },
+  notion: { name: 'Notion', dir: 'notion' },
+  linear: { name: 'Linear', dir: 'linear' },
 };
 
 const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);

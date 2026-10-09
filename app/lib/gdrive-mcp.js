@@ -28,9 +28,8 @@ const { verify, commit } = require('./sync');
 const { collect } = require('./buttons');
 const { getConfig } = require('./config');
 const { readPending, writePending } = require('./ledger');
+const { tool } = require('./connectors');
 
-const P = 'mcp__claude_ai_Google_Drive__';
-const SEARCH = `${P}search_files`, RECENT = `${P}list_recent_files`, META = `${P}get_file_metadata`, READ = `${P}read_file_content`;
 const DAY = 864e5;
 const RECENT_MAX_PAGES = 10, MAX_DEPTH = 12;
 
@@ -79,6 +78,8 @@ function render(meta, content, reasons, parentTitle, maxBody = 50000) {
 async function syncGdriveMcp(run, ctx) {
   const { vault, logLine, finish, src } = ctx;
   const log = (s) => logLine(run, s);
+  const P = (n) => tool(vault, 'gdrive', n);
+  const SEARCH = P('search_files'), RECENT = P('list_recent_files'), META = P('get_file_metadata'), READ = P('read_file_content');
   const dir = path.join(vault, 'gdrive');
   const statePath = path.join(dir, '.state.json'), cachePath = path.join(dir, '.parent-cache.json');
   const state = readJson(statePath, {}), cache = readJson(cachePath, {});

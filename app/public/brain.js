@@ -186,7 +186,7 @@
         <div class="t">${esc(it.title)}</div>
         ${it.note ? `<div class="n">${noteHtml(it.note)}</div>` : ''}
         <div class="row">
-          ${(it.actions || []).map((a) => `<button class="small" data-act="${esc(a.kind)}" data-slug="${esc(a.slug || '')}" data-confirm="${esc(a.confirm || '')}">${esc(a.label)}</button>`).join('')}
+          ${(it.actions || []).map((a) => `<button class="small" data-act="${esc(a.kind)}" data-slug="${esc(a.slug || '')}" data-url="${esc(a.url || '')}" data-confirm="${esc(a.confirm || '')}">${esc(a.label)}</button>`).join('')}
           ${(it.files || []).map((f) => `<button class="ghost small ${preview && preview.path === f.path ? 'on' : ''}" data-view="${esc(f.path)}" data-bot="${b.id}">View${f.label ? ' ' + esc(f.label) : ''}</button>`).join('')}
           ${it.obsidian ? `<a href="${obsidian(it.obsidian)}"><button class="ghost small">Open in Obsidian</button></a>` : ''}
         </div>`).join('')}
@@ -284,6 +284,15 @@
     }
     const a = t.closest('[data-act]');
     if (a && a.dataset.act === 'goto') return select(a.dataset.slug);
+    // Only https links to claude.ai open from a card (the connector settings).
+    if (a && a.dataset.act === 'open-url') { if (/^https:\/\/claude\.ai\//.test(a.dataset.url)) window.open(a.dataset.url, '_blank', 'noopener'); return; }
+    if (a && a.dataset.act === 'run') {
+      a.disabled = true;
+      const res = await api(`/api/brain/bots/${encodeURIComponent(a.dataset.slug)}/run`, { method: 'POST', body: '{}' });
+      if (res.error) alert(res.error);
+      $('#drawer').hidden = false; store.set('brain.drawer', true);
+      return load();
+    }
     if (a) {
       if (a.disabled || (a.dataset.confirm && !confirm(a.dataset.confirm))) return;
       a.disabled = true;

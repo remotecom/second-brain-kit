@@ -46,6 +46,8 @@ const { syncGdriveMcp } = require('./gdrive-mcp');
 const { readOwner, getConfig } = require('./config');
 const { botArgs, botEnv } = require('./claude-call');
 const { script } = require('./kit');
+const { tool, SETTINGS_URL } = require('./connectors');
+const { pressButtons, connectorVerdict } = require('./buttons');
 const { dayOf } = require('./time');
 const BUTTON_SYNCS = { slack: syncSlackMcp, linear: syncLinearMcp, notion: syncNotionMcp, gcal: syncGcalMcp, gdrive: syncGdriveMcp };
 
@@ -128,12 +130,14 @@ async function chat(claudeBin, { message, sessionId, model }) {
 //   bash   — runs a vault script, no tokens
 //   later  — designed, not built yet; shown so the board tells the truth
 
-const HEALTH_TOOLS = {
-  slack: 'mcp__claude_ai_Slack__slack_read_user_profile',
-  linear: 'mcp__claude_ai_Linear__list_teams',
-  notion: 'mcp__claude_ai_Notion__notion-get-users',
-  gcal: 'mcp__claude_ai_Google_Calendar__list_calendars',
-  gdrive: 'mcp__claude_ai_Google_Drive__list_recent_files',
+// One cheap read per source, for the health probe. Tool names follow
+// config.yaml connectors.<source>.
+const HEALTH_CALLS = {
+  slack: ['slack_read_user_profile', (o) => ({ user_id: o.slack_user_id, response_format: 'concise' })],
+  linear: ['list_teams', () => ({ limit: 1 })],
+  notion: ['notion-get-users', () => ({ page_size: 1 })],
+  gcal: ['list_calendars', () => ({})],
+  gdrive: ['list_recent_files', () => ({ pageSize: 1 })],
 };
 
 const BOTS = [
@@ -201,7 +205,7 @@ const BOTS = [
         const calBot = BOTS.find((b) => b.id === 'sync-gcal');
         const child = newRun(calBot);
         logLine(run, 'today\'s calendar is stale; running Sync Calendar first…');
-        await Promise.resolve(calBot.run(child, claudeBin, {})).catch((e) => finish(child, 'error', e.message));
+        await Promise.resolve(calBot.run(child, claudeBin, {})).catch((e) => failRun(child, e));
         refreshed = { status: child.status, summary: child.summary, costUsd: child.costUsd };
         logLine(run, `Sync Calendar: ${child.status} · ${child.summary}`);
       }
@@ -221,7 +225,7 @@ function isRunning(botId) { return [...runs.values()].some((r) => r.bot === botI
 async function runBotAndWait(botId, claudeBin, body = {}) {
   const bot = BOTS.find((b) => b.id === botId);
   const run = newRun(bot);
-  await Promise.resolve(bot.run(run, claudeBin, body)).catch((e) => finish(run, 'error', e.message));
+  await Promise.resolve(bot.run(run, claudeBin, body)).catch((e) => failRun(run, e));
   if (run.status === 'running') finish(run, 'error', 'bot returned without finishing');
   return run;
 }
@@ -236,7 +240,7 @@ function start(claudeBin) {
       const bot = BOTS.find((b) => b.id === 'morning');
       const run = newRun(bot);
       logLine(run, 'started by the schedule');
-      Promise.resolve(bot.run(run, claudeBin)).catch((e) => finish(run, 'error', e.message));
+      Promise.resolve(bot.run(run, claudeBin)).catch((e) => failRun(run, e));
     },
   });
 }
@@ -255,6 +259,13 @@ function logLine(run, text) {
   if (run.log.length > 400) run.log.splice(0, run.log.length - 400);
 }
 
+// A thrown error ends the run. kind 'auth' (a connector is not connected)
+// becomes a Your-move card with the fix link (todoFor).
+function failRun(run, e) {
+  const detail = e && e.kind ? { kind: e.kind, source: e.source, fix: e.fix } : null;
+  finish(run, 'error', (e && e.message) || String(e), detail, (e && e.cost) || 0);
+}
+
 function finish(run, status, summary, detail, costUsd = 0) {
   Object.assign(run, { status, summary, detail, costUsd, endedAt: stampNow() });
   logLine(run, `${status.toUpperCase()}: ${summary}`);
@@ -267,34 +278,32 @@ function finish(run, status, summary, detail, costUsd = 0) {
   }
 }
 
+// Code decides each status from the stream; the model only makes the calls.
+// (Asked to report statuses itself, haiku said "5/5 ok" with no connector
+// loaded at all, 2026-10-09.)
 async function runHealth(run, claudeBin) {
-  const names = Object.entries(HEALTH_TOOLS).map(([k, t]) => `${k}: ${t}`).join('\n');
-  const prompt = `Health probe. For each source below, call its tool exactly once with minimal arguments (Slack: user_id ${readOwner(VAULT).slack_user_id || 'unknown'}, response_format concise. Notion: query "a", page_size 1. Drive: pageSize 1). Call nothing else except ToolSearch if a schema needs loading. Do not print any personal data.\n${names}\nReply with ONLY a JSON object: for each source {"status": one of ok | auth (the service said you are not authenticated) | missing (tool not available) | error, "reason": "under 12 words"}.`;
-  logLine(run, 'probing 5 connectors (haiku)…');
-  const r = await claudeJSON(claudeBin, botArgs({
-    prompt, model: 'haiku', format: 'json', tools: 'ToolSearch', mcp: true,
-    allowed: ['ToolSearch', ...Object.values(HEALTH_TOOLS)], budget: 0.5,
-  }), { cwd: CHAT_CWD, timeoutMs: 240000 });
-  const p = r.parsed;
-  if (!p) return finish(run, 'error', `claude gave no result (exit ${r.code})`, { stderr: r.stderr });
-  const m = String(p.result || '').match(/\{[\s\S]*\}/);
-  let status = {};
-  try { status = m ? JSON.parse(m[0]) : {}; } catch {}
-  // Haiku sometimes nests {status, reason}; flatten to the bare status.
-  const reasons = {};
-  for (const [k, v] of Object.entries(status)) {
-    if (v && typeof v === 'object') { reasons[k] = v.reason || ''; status[k] = String(v.status || 'unknown'); }
+  const owner = readOwner(VAULT);
+  const want = Object.entries(HEALTH_CALLS).map(([k, [name, args]]) => ({ k, t: tool(VAULT, k, name), args: args(owner) }));
+  const prompt = ['Health probe. Call each tool below exactly once with exactly these arguments (load each with ToolSearch "select:<tool>" first). Call nothing else. Do not repeat any result. Then reply DONE.',
+    ...want.map((w) => `  ${w.t} ${JSON.stringify(w.args)}`)].join('\n');
+  logLine(run, `probing ${want.length} connectors (haiku presses, code judges)…`);
+  const r = await pressButtons({ claudeBin, vault: CHAT_CWD, env: claudeEnv(), logLine }, run, prompt, 0.5, want.map((w) => w.t));
+  const status = {}, reasons = {};
+  for (const w of want) {
+    const c = r.calls.find((x) => x.name === w.t);
+    const text = c ? String(c.text || '') : '';
+    if (c && !/not authenticated|unauthori[sz]ed|authenticate first|invalid[_ ]token|insufficient scope/i.test(text) && !/^Error/i.test(text)) { status[w.k] = 'ok'; continue; }
+    if (c) { status[w.k] = /scope/i.test(text) ? 'auth' : 'error'; reasons[w.k] = text.slice(0, 120); continue; }
+    const v = connectorVerdict(r.servers, r.searches, [w.t]);
+    status[w.k] = v ? 'auth' : 'error';
+    reasons[w.k] = v ? `${v.server}: ${v.problem}` : 'no result came back';
   }
-  // A tool the CLI itself refused is a permission problem, whatever the model says.
-  for (const d of p.permission_denials || []) {
-    const src = Object.keys(HEALTH_TOOLS).find((k) => HEALTH_TOOLS[k] === d.tool_name);
-    if (src) status[src] = 'permission';
-  }
-  for (const k of Object.keys(HEALTH_TOOLS)) if (!status[k]) status[k] = 'unknown';
   const bad = Object.entries(status).filter(([, v]) => v !== 'ok');
   for (const [k, v] of Object.entries(status)) logLine(run, `${k}: ${v}${reasons[k] ? ` (${reasons[k]})` : ''}`);
-  const summary = bad.length ? `${5 - bad.length}/5 ok · ${bad.map(([k, v]) => `${k} ${v}`).join(', ')}` : '5/5 ok';
-  finish(run, bad.length ? 'warn' : 'ok', summary, { sources: status, reasons, answer: String(p.result || '').slice(0, 2000), ms: r.ms }, p.total_cost_usd || 0);
+  const summary = bad.length ? `${want.length - bad.length}/${want.length} ok · ${bad.map(([k, v]) => `${k} ${v}`).join(', ')}` : `${want.length}/${want.length} ok`;
+  const auth = bad.filter(([, v]) => v === 'auth').map(([k]) => k);
+  const detail = { sources: status, reasons, ...(auth.length ? { kind: 'auth', source: auth.join(','), fix: SETTINGS_URL } : {}) };
+  finish(run, bad.length ? (auth.length ? 'error' : 'warn') : 'ok', auth.length ? `${summary}. Open claude.ai → Settings → Connectors to connect ${auth.join(', ')}.` : summary, detail, r.cost);
 }
 
 function runScript(run, script, summarize) {
@@ -399,6 +408,20 @@ function todoFor(id) {
       })),
     };
   }
+  // A sync that stopped because its connector is not connected.
+  if (/^sync-/.test(id) || id === 'health') {
+    const last = latestFor(id);
+    const d = last && last.detail;
+    if (!last || last.status !== 'error' || !d || d.kind !== 'auth') return null;
+    const bot = BOTS.find((b) => b.id === id);
+    return {
+      text: last.summary,
+      items: [{ title: bot ? bot.name : id, actions: [
+        { label: 'Open claude.ai connectors', kind: 'open-url', url: d.fix },
+        { label: 'Run again', kind: 'run', slug: id },
+      ] }],
+    };
+  }
   // Verify writes Needs-You.md and Resolve applies it; the move belongs to Resolve only.
   if (id === 'resolve') {
     const n = needsYouOpen();
@@ -495,7 +518,7 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     if (busy) return json(res, 409, { error: `${bot.name} is already running`, runId: busy.id }), true;
     const body = await readBody(req).catch(() => ({}));
     const run = newRun(bot);
-    Promise.resolve(bot.run(run, claudeBin, body || {})).catch((e) => finish(run, 'error', e.message));
+    Promise.resolve(bot.run(run, claudeBin, body || {})).catch((e) => failRun(run, e));
     json(res, 200, { runId: run.id });
     return true;
   }
@@ -526,7 +549,7 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     try { tickRestructure(String((body || {}).slug || '')); } catch (e) { return json(res, 400, { error: e.message }), true; }
     const bot = BOTS.find((b) => b.id === 'restructure');
     const run = newRun(bot);
-    Promise.resolve(bot.run(run, claudeBin, {})).catch((e) => finish(run, 'error', e.message));
+    Promise.resolve(bot.run(run, claudeBin, {})).catch((e) => failRun(run, e));
     json(res, 200, { runId: run.id });
     return true;
   }

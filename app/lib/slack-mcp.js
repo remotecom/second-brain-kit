@@ -26,9 +26,8 @@ const { pressButtons } = require('./buttons');
 const { requireOwner, getConfig } = require('./config');
 const { dayOf, dayStart } = require('./time');
 const { readPending, writePending } = require('./ledger');
+const { tool, connectorError } = require('./connectors');
 
-const SEARCH = 'mcp__claude_ai_Slack__slack_search_public_and_private';
-const THREAD = 'mcp__claude_ai_Slack__slack_read_thread';
 const PLACEHOLDER = '_Earlier replies not synced (mention-only thread)._';
 const MENTION_TAIL = 5;
 const THREAD_BATCH = 30;
@@ -103,6 +102,8 @@ const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 async function syncSlackMcp(run, ctx) {
   const { vault, logLine, finish, src } = ctx;
   const log = (s) => logLine(run, s);
+  const SEARCH = tool(vault, 'slack', 'slack_search_public_and_private');
+  const THREAD = tool(vault, 'slack', 'slack_read_thread');
   // The owner's days throughout: the day files use them, and using UTC
   // "today" ran the range a day into the future in the evening (2026-10-01).
   const cfg = getConfig(vault), tz = cfg.owner.timezone;
@@ -147,6 +148,7 @@ async function syncSlackMcp(run, ctx) {
         'Do not read, summarize or judge the results. When every search is exhausted, reply with the single word DONE.',
       ].join('\n');
       const r = await pressButtons(ctx, run, instr, 2, [SEARCH, THREAD]);
+      if (r.connector && !r.calls.length) throw Object.assign(connectorError('slack', `${r.connector.server}: ${r.connector.problem}`), { cost: cost + r.cost });
       cost += r.cost;
       for (const p of batch) {
         const key = p.args.filters || p.args.query;
@@ -190,6 +192,7 @@ async function syncSlackMcp(run, ctx) {
         'Do not read, summarize or judge the results. When all are done, reply with the single word DONE.',
       ].join('\n');
       const r = await pressButtons(ctx, run, instr, 2, [SEARCH, THREAD]);
+      if (r.connector && !r.calls.length) throw Object.assign(connectorError('slack', `${r.connector.server}: ${r.connector.problem}`), { cost: cost + r.cost });
       cost += r.cost;
       for (const c of r.calls.filter((x) => x.name === THREAD)) {
         const j = parseJSONText(c.text);

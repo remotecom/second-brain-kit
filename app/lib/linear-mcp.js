@@ -21,8 +21,8 @@ const { verify, commit } = require('./sync');
 const { readPending, writePending } = require('./ledger');
 const { getConfig } = require('./config');
 const { linearTiers } = require('./tiers');
+const { tool } = require('./connectors');
 
-const T = (name) => `mcp__claude_ai_Linear__${name}`;
 const DAY = 86400000;
 
 const q = (v) => (v === null || v === undefined || v === '' ? 'null' : JSON.stringify(String(v)));
@@ -64,6 +64,7 @@ function renderComments(comments, baseUrl) {
 async function syncLinearMcp(run, ctx) {
   const { vault, logLine, finish, src } = ctx;
   const log = (s) => logLine(run, s);
+  const T = (name) => tool(vault, 'linear', name);
   const scopePath = path.join(vault, 'linear', '.initiative-scope.json');
   let scope;
   try { scope = JSON.parse(fs.readFileSync(scopePath, 'utf8')); } catch { return finish(run, 'error', 'linear/.initiative-scope.json missing or unreadable; run a rescope first'); }

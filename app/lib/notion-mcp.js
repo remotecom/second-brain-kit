@@ -22,8 +22,8 @@ const { collect } = require('./buttons');
 const { verify, commit } = require('./sync');
 const { requireOwner, getConfig } = require('./config');
 const { readPending, writePending } = require('./ledger');
+const { tool } = require('./connectors');
 
-const T = (name) => `mcp__claude_ai_Notion__${name}`;
 const DAY = 86400000;
 const CATCHALL = ['the', 'a', 'Remote'];
 const COMMENT_TRIES = 3;
@@ -74,6 +74,7 @@ function renderComments(xml) {
 async function syncNotionMcp(run, ctx) {
   const { vault, logLine, finish, src } = ctx;
   const log = (s) => logLine(run, s);
+  const T = (name) => tool(vault, 'notion', name);
   let owner;
   try { owner = requireOwner(vault, ['notion_user_id', 'name']); } catch (e) { return finish(run, 'error', e.message); }
   const me = owner.notion_user_id;
