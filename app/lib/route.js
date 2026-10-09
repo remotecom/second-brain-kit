@@ -11,7 +11,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { readList } = require('./config');
+const { getConfig } = require('./config');
 
 const TYPE_WEIGHT = { people: 0.15, concepts: 0.6, principles: 0.3, workflows: 0.6, problems: 0.7 };
 const ENTITY_TAG = /^(partner|customer|integrator|system)\/(.+)$/;
@@ -56,7 +56,7 @@ function termsOf(rel, text) {
 let localStop = new Set();
 
 function buildIndex(vault) {
-  localStop = new Set(readList(vault, 'ingest', 'stop_words').map((w) => w.toLowerCase()));
+  localStop = new Set(getConfig(vault).route.stop_words.map((w) => String(w).toLowerCase()));
   const root = path.join(vault, 'wiki');
   const pages = [];
   for (const abs of walk(root)) {

@@ -24,7 +24,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { readBlock } = require('./config');
+const { getConfig } = require('./config');
 const { deltaWalk } = require('./ingest');
 
 const TICK_MS = 5 * 60000;
@@ -33,10 +33,10 @@ const SYNC_ORDER = ['sync-slack', 'sync-gcal', 'sync-linear', 'sync-notion', 'sy
 const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 function settings(vault) {
-  const b = readBlock(vault, 'schedule');
-  const at = /^\d{1,2}:\d{2}$/.test(b.morning_at || '') ? b.morning_at : '06:00';
+  const b = getConfig(vault).schedule;
+  const at = /^\d{1,2}:\d{2}$/.test(String(b.morning_at || '')) ? String(b.morning_at) : '06:00';
   return {
-    enabled: b.enabled === 'true',
+    enabled: b.enabled === true,
     morningAt: at,
     ingestMinFiles: Number(b.ingest_min_files) || 60,
     ingestMaxDays: Number(b.ingest_max_days) || 3,

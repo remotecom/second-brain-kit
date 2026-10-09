@@ -28,7 +28,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { specSection, rulesSection, claudeStream, shortInput } = require('./sync');
-const { readOwner, readIngestExcludes } = require('./config');
+const { readOwner, getConfig } = require('./config');
 const { script } = require('./kit');
 const { route, groupParts } = require('./route');
 const { linearTiers } = require('./tiers');
@@ -513,7 +513,7 @@ async function runIngest(run, { claudeBin, vault, env, logLine, finish, latestFo
   // Mechanical skips. Named files skip the hash rule: they were named on purpose.
   const hashesPath = path.join(vault, '.bot', 'state', 'ingested-hashes.json');
   let ingested = {}; try { ingested = JSON.parse(fs.readFileSync(hashesPath, 'utf8')); } catch {}
-  const excludes = new Set(readIngestExcludes(vault));
+  const excludes = new Set(getConfig(vault).ingest.exclude.map(String));
   let tiers;
   try { tiers = linearTiers(vault); } catch (e) { return finish(run, 'error', e.message); }
   const skipped = [];

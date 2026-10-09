@@ -78,12 +78,12 @@ level, so you may not be able to enable them at all. Flip `enabled: true` only
 once `/mcp` shows the connector actually returning data.
 
 **First run of a Google source is slow.** With no `.last-sync` yet, the source
-back-fills `bootstrap_horizon_days` of history once (default 365) before
+back-fills `bootstrap_days` of history once (default 7) before
 settling into the rolling window. That is expected, not a hang.
 
 **Read the sensitivity denylist before enabling Calendar or Drive.** These are
 personal accounts (the denylist also covers Gmail, whenever its op lands).
-`config.yaml`'s `exclude_labels` / `exclude_categories` / `exclude_folders` /
+`config.yaml`'s `exclude_labels` / `exclude_categories` / `exclude_folders` / `exclude_folder_titles` /
 `include_private` are applied at fetch time so excluded
 content never lands on disk. `.gitignore` only keeps things out of git — it does
 not keep them out of the plaintext files every vault session reads, or out of
@@ -99,8 +99,11 @@ Edit `config.yaml`:
 
 - `owner.slack_user_id` — your Slack member ID (Slack → your profile → *More* →
   *Copy member ID*).
-- `sources.linear.team_key` — the Linear team you want synthesized.
-- `sources.notion.watched_databases` — leave empty to start; add databases you
+- `sources.linear.scope` — ONE of `initiative` (a Linear initiative ID; its whole
+  sub-tree is synced) or `team` (a team key such as `ENG`).
+- `owner.timezone` — your time zone, e.g. `America/New_York`. Day files and the
+  Morning run use it.
+- `sources.notion.watched` — leave empty to start; add databases you
   live in (meeting notes, OKRs, trackers). First `sync notion` bootstraps the
   allowlist by name and asks you to confirm.
 - Leave `owner.notion_user_id` blank; it's resolved and cached on first run.

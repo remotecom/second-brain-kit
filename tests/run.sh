@@ -293,5 +293,17 @@ else
   printf '  skip name check (no denylist at %s)\n' "$DENY"
 fi
 
+# ===========================================================================
+sect "7. App unit tests (node --test app/test)"
+# ===========================================================================
+NODE=$(command -v node || ls /opt/homebrew/bin/node /usr/local/bin/node 2>/dev/null | head -1)
+if [ -n "$NODE" ]; then
+  nt_out=$("$NODE" --test app/test/*.test.js 2>&1); nt_rc=$?
+  is "node --test passes ($(printf '%s' "$nt_out" | grep -E '^ℹ pass' | tr -dc '0-9') tests)" "0" "$nt_rc"
+  [ "$nt_rc" = 0 ] || printf '%s\n' "$nt_out" | grep -E '^not ok|✖|Error' | head -20
+else
+  printf '  skip app unit tests (node not found)\n'
+fi
+
 printf '\n=========================\n  PASS %s   FAIL %s\n=========================\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

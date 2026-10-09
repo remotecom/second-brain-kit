@@ -13,13 +13,13 @@
 
 const fs = require('fs');
 const path = require('path');
-const { readList } = require('./config');
+const { getConfig } = require('./config');
 
 const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 function linearTiers(vault, scope) {
   if (!scope) { try { scope = JSON.parse(fs.readFileSync(path.join(vault, 'linear', '.initiative-scope.json'), 'utf8')); } catch { scope = { initiatives: [], projects: [] }; } }
-  const roots = readList(vault, 'linear', 'deep_initiatives');
+  const roots = getConfig(vault).linear.deep_initiatives.map(String);
   if (!roots.length) return { configured: false, isDeepProject: () => true, isDeepInitiative: () => true, deepProjects: scope.projects, linkProjects: [], linkWorkstreams: [], roots };
   // The subtree under each deep root.
   const kids = new Map();

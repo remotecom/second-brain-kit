@@ -21,7 +21,7 @@ const fs = require('fs');
 const path = require('path');
 const { verify, commit } = require('./sync');
 const { collect } = require('./buttons');
-const { readList } = require('./config');
+const { getConfig } = require('./config');
 
 const TOOL = 'mcp__claude_ai_Google_Calendar__list_events';
 const TZ = 'America/Los_Angeles';
@@ -87,7 +87,7 @@ function renderDay(day, calendars, evs, excluded) {
 async function syncGcalMcp(run, ctx) {
   const { vault, logLine, finish, src } = ctx;
   const log = (s) => logLine(run, s);
-  const calendars = readList(vault, 'gcal', 'calendars');
+  const calendars = getConfig(vault).sources.gcal.calendars.map(String);
   if (!calendars.length) return finish(run, 'error', 'set gcal.calendars in config.yaml (the allowlist of calendars to sync)');
 
   const today = pacDay(new Date());

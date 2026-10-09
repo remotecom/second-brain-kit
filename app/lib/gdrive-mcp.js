@@ -26,14 +26,13 @@ const fs = require('fs');
 const path = require('path');
 const { verify, commit } = require('./sync');
 const { collect } = require('./buttons');
-const { readList } = require('./config');
+const { getConfig } = require('./config');
 const { readPending, writePending } = require('./ledger');
 
 const P = 'mcp__claude_ai_Google_Drive__';
 const SEARCH = `${P}search_files`, RECENT = `${P}list_recent_files`, META = `${P}get_file_metadata`, READ = `${P}read_file_content`;
 const DAY = 864e5;
 const WINDOW_DAYS = 4, BOOTSTRAP_DAYS = 30, RECENT_MAX_PAGES = 10, MAX_BODY = 50000, MAX_DEPTH = 12;
-const EXCLUDED_TITLES = new Set(['Meet Recordings', 'Google Meet']);
 
 // What read_file_content can read, and the short tag each gets.
 const MIME = {
@@ -84,7 +83,9 @@ async function syncGdriveMcp(run, ctx) {
   const statePath = path.join(dir, '.state.json'), cachePath = path.join(dir, '.parent-cache.json');
   const state = readJson(statePath, {}), cache = readJson(cachePath, {});
   const watched = readJson(path.join(dir, '.allowlist'), []);
-  const excludeIds = new Set(readList(vault, 'gdrive', 'exclude_folders'));
+  const gd = getConfig(vault).sources.gdrive;
+  const excludeIds = new Set(gd.exclude_folders.map(String));
+  const EXCLUDED_TITLES = new Set(gd.exclude_folder_titles.map(String));
   let cost = 0;
 
   let wm = null; try { wm = Date.parse(fs.readFileSync(path.join(dir, '.last-sync'), 'utf8').trim()); } catch {}

@@ -1,147 +1,163 @@
 # ============================================================================
-# Second Brain Kit — your configuration.
+# Second Brain Kit: your configuration.
 #
-# Copy this file to `config.yaml` and fill it in. `CLAUDE.md` reads these
-# values wherever you see {{DOUBLE_BRACES}}. This is the ONLY file you should
-# need to edit to make the kit fit your function.
+# The Setup page writes this file for you. You can also copy it to
+# `config.yaml` in your vault and fill it in by hand. `CLAUDE.md` reads these
+# values wherever you see {{DOUBLE_BRACES}}, and the app reads every key.
 #
-# The MECHANICS (sync/ingest/query/lint, watermarks, rolling windows, the
-# multi-agent orchestration) are identical for everyone. Only the SCOPE and
-# the TAXONOMY below are yours.
+# The MECHANICS (sync/ingest/query/lint, watermarks, rolling windows) are the
+# same for everyone. Only the SCOPE and the TAXONOMY below are yours.
+#
+# Rules for this file:
+# - The app never changes a value you set. An update only ADDS new keys, with
+#   their defaults (`second-brain update` shows the diff first).
+# - A key you leave out takes the default shown here.
 # ============================================================================
+
+config_version: 2
 
 owner:
   name: "Your Name"
+  email: "you@example.com"
   # Your Slack member ID (Slack profile -> More -> Copy member ID). Used by
   # `sync slack` to find your sent messages, and by the outbound-review gate.
   slack_user_id: "U000XXXXX"
   # Your self-DM channel ID, if you keep a working-notebook DM to yourself.
-  slack_self_dm_id: "D000XXXXX"
-  # Your Notion user UUID. Leave blank on first run; `sync notion` resolves and
-  # caches it to notion/.user-id.
+  slack_self_dm_id: ""
+  # Your Notion user UUID. Leave blank: the Setup page finds it.
   notion_user_id: ""
+  # Day boundaries, meeting times and the Morning run use this time zone.
+  # Setup fills in your Mac's zone.
+  timezone: "America/New_York"
 
 # --------------------------------------------------------------------------
-# SOURCE SCOPE — what the sync ops pull in. This is the biggest per-function
-# knob. A partnerships SA, an eng lead, and a BizOps analyst scope these very
-# differently.
+# CONNECTORS: the claude.ai connector each source uses. Tool names differ per
+# account, so Setup probes them and writes the prefix here. Each value is the
+# part before the double underscore, e.g. mcp__claude_ai_Slack for
+# mcp__claude_ai_Slack__slack_read_thread.
+# --------------------------------------------------------------------------
+connectors:
+  slack: "mcp__claude_ai_Slack"
+  linear: "mcp__claude_ai_Linear"
+  notion: "mcp__claude_ai_Notion"
+  gcal: "mcp__claude_ai_Google_Calendar"
+  gdrive: "mcp__claude_ai_Google_Drive"
+
+# --------------------------------------------------------------------------
+# SOURCE SCOPE: what the syncs pull in. This is the biggest per-function knob.
+# A partnerships SA, an eng lead and a BizOps analyst scope these differently.
+#
+# window_days is the rolling re-fetch window: every sync re-reads at least
+# this many days, so late thread replies and edits heal themselves.
+#
+# The exclude_* keys are the SENSITIVITY DENYLIST. Google accounts hold comp,
+# HR, recruiting, medical and private-event content. Exclusions are applied at
+# fetch time, so excluded content never reaches the vault.
 # --------------------------------------------------------------------------
 sources:
   slack:
     enabled: true
-    # Rolling re-fetch window in days (self-heals late thread replies).
-    rolling_window_days: 4
+    window_days: 2
+  gcal:
+    enabled: true
+    window_days: 4
+    # EXPLICIT ALLOWLIST. Only these calendar IDs are synced. An account can
+    # also read your personal calendar and colleagues' calendars; syncing
+    # everything readable would pull those into the vault.
+    calendars:
+      - "you@example.com"
+    include_private: false          # skip events with visibility: private
+    include_declined: false         # skip events you declined
+    # Descriptions over this length are cut with an explicit marker. A
+    # DECLARED cap, never a per-event judgment by the sync.
+    max_description_chars: 2000
   linear:
     enabled: true
-    # Your Linear team key (e.g. "ENG", "GTM", "OPS"). The team whose work you
-    # want synthesized. Sync scopes to this team's active + recently-closed
-    # projects, plus anything assigned to you.
-    team_key: "TEAM"
-    rolling_window_days: 4
+    window_days: 4
+    # ONE of these: an initiative (its whole sub-tree of initiatives and
+    # projects) or a team key. Setup has a live, searchable picker.
+    scope:
+      initiative: ""                # Linear initiative ID
+      team: ""                      # or a team key, e.g. "ENG"
   notion:
     enabled: true
-    rolling_window_days: 4
-    # Databases you want watched (title + the signal they carry). Bootstrap on
-    # first run: the kit searches by name, you confirm, it persists to
-    # notion/.allowlist.
-    watched_databases: []
+    window_days: 4
+    # Extra search words that find pages you created or edited. Notion search
+    # needs a query; common words in your workspace work best.
+    search_terms: ["the", "a"]
+    # Databases you want watched (name + the signal they carry). Saved to
+    # notion/.allowlist on the first run.
+    watched: []
       # - name: "Team meeting notes"
       #   signal_type: "database"
-      # - name: "OKRs / planning"
-      #   signal_type: "database"
-
-  # ---- Google Workspace -----------------------------------------------------
-  # These default to `enabled: false` (unlike the three above). Two reasons:
-  #   1. Gmail and Calendar need `/mcp` auth before their tools exist at all.
-  #   2. Many Workspace tenants block third-party Drive/Gmail OAuth scopes at
-  #      the admin level, so a teammate may simply not be able to connect.
-  # A disabled source is skipped cleanly instead of failing the whole sync.
-  #
-  # `bootstrap_horizon_days` only applies on a source's FIRST run (no
-  # .last-sync yet). It back-fills history once, then the rolling window takes
-  # over. Without it a new source on an existing vault would only ever see the
-  # last few days and your history would be invisible forever.
-  #
-  # The `exclude_*` keys are the SENSITIVITY DENYLIST. These are personal
-  # accounts: they hold comp, HR, recruiting, medical and private-event
-  # content. Gitignore keeps that out of git; it does NOT keep it out of the
-  # plaintext files every vault session reads, or out of synthesized wiki
-  # pages. Exclusions are applied at fetch time so the content never lands.
   gdrive:
-    enabled: false
-    rolling_window_days: 4
-    bootstrap_horizon_days: 365
-    # Folders to sync in full (bootstrapped to gdrive/.allowlist on first run).
-    # NOTE: single-level — the Drive API's parentId does NOT recurse into
-    # subfolders. List subfolders explicitly if you need them.
+    enabled: true
+    window_days: 4
+    # Folders to sync in full. Single level: Drive's parentId does NOT recurse.
     watched_folders: []
-    # Excluded by folder title or ID. "Meet Recordings" is the default because
-    # it holds video recordings, chat logs, and auto-generated "Notes by Gemini"
-    # docs that are usually pure boilerplate ("A summary wasn't produced for this
-    # meeting"). Excluding a FOLDER is auditable; judging each doc's emptiness
-    # would be the editorial discretion the Rules forbid.
-    exclude_folders:
+    # Folder trees never synced, matched by ANY ancestor (by ID or by title).
+    # The Meet trees hold recordings, chat logs and "Notes by Gemini" docs that
+    # are often pure boilerplate. Excluding a FOLDER is auditable; judging each
+    # doc would be the editorial discretion the Rules forbid.
+    exclude_folders: []
+    exclude_folder_titles:
       - "Meet Recordings"
-    # Only types `read_file_content` can actually read. `text/*` is NOT
-    # supported by the connector and would fail; images are supported but
-    # produce useless raw, so they are deliberately absent.
-    mime_allowlist:
-      - "application/vnd.google-apps.document"
-      - "application/vnd.google-apps.presentation"
-      - "application/vnd.google-apps.spreadsheet"
-      - "application/pdf"
-      - "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      - "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      - "Google Meet"
     max_body_chars: 50000
-
   gmail:
-    # SPECIFIED BUT DISABLED. The connector holds no mail scopes ("Insufficient
-    # scope" from list_labels). Re-auth in /mcp first, then see the enabling
-    # checklist in CLAUDE.md — enabling requires THREE edits in one change, one
-    # of which is wiki.promotion.person_external_min below.
+    # SPECIFIED BUT NOT IMPLEMENTED. Enabling it needs THREE edits in one
+    # change, one of which is wiki.promotion.person_external_min below. See the
+    # Gmail op in CLAUDE.md.
     enabled: false
-    rolling_window_days: 4
-    bootstrap_horizon_days: 365
-    # Self-imposed cost ceiling per run, NOT a connector limit (search_threads
-    # paginates via pageToken). On truncation the op halves the window and
-    # re-runs each half until every sub-window fits — it must never clamp the
-    # watermark, because search_threads guarantees no ordering and the dropped
-    # threads may be newer than any clamp. See the Gmail op in CLAUDE.md.
+    window_days: 4
     max_threads_per_sync: 150
-    # Thread bodies over this length truncate with an explicit marker and
-    # `truncated: true`. A declared cap, never per-thread judgment.
     max_body_chars: 12000
-    # NOTE: exclude_labels takes label IDs, not display names. Resolve them with
-    # list_labels once the connector is authorized.
-    exclude_labels: []
+    exclude_labels: []              # label IDs, not display names
     exclude_categories: ["promotions", "social", "forums"]
     strip_quoted_replies: true      # else a 20-message thread stores itself 20x
     include_attachments: false
 
-  gcal:
-    enabled: false
-    rolling_window_days: 4
-    bootstrap_horizon_days: 365
-    # EXPLICIT ALLOWLIST. Only these calendar IDs are synced.
-    # `list_calendars` on a real account also returns your PERSONAL calendar,
-    # colleagues' calendars shared with you, and org PTO/holiday calendars.
-    # Syncing everything readable would pull your personal life and a
-    # coworker's schedule into the vault. List only what you want synthesized.
-    calendars:
-      - "you@yourcompany.com"       # your work calendar
-    include_private: false          # skip events with visibility: private
-    include_declined: false         # skip events you declined
-    # Descriptions over this length are truncated with an explicit marker and
-    # `truncated: true`. Corporate invites carry kilobytes of dial-in and legal
-    # boilerplate. This is a DECLARED cap, not sync-agent judgment — the Rules
-    # forbid editorial condensing, so the trim has to be a config rule you can
-    # audit, not a decision the model makes per event.
-    max_description_chars: 2000
+# The first sync of each source back-fills this many days once (7, 14 or 30).
+# After that the rolling window takes over.
+bootstrap_days: 7
 
 # --------------------------------------------------------------------------
-# WIKI TAXONOMY — the entity types the synthesis layer organizes around.
-# The defaults below are tuned for a partnerships / solutions-architecture
-# function. SWAP THEM for what matters in yours. Examples:
+# THE MORNING RUN: every enabled sync, then Resolve, Brief, Ingest (when due)
+# and Verify. Fires once a day at morning_at in owner.timezone; if the Mac is
+# asleep then, it runs on wake.
+# --------------------------------------------------------------------------
+schedule:
+  enabled: true
+  morning_at: "06:00"
+  ingest_min_files: 60   # ingest when this many new raw files have piled up
+  ingest_max_days: 3     # or when the last ingest is this many days old
+
+# Bots run on your claude.ai plan and share its usage limits with you. This
+# caps how much of a day's limit the bots may use: light, normal or heavy
+# (about 25, 40 or 60 percent). The bots pause and tell you when they reach it.
+usage_share: normal
+
+# Claude Code sessions the app opens (Repair, Look into this, vault chat).
+sessions:
+  max_running: 4         # a 5th session puts the oldest idle one to sleep
+  idle_sleep_min: 30     # a session with no input for this long goes to sleep
+  keep_days: 30          # transcripts of finished sessions are kept this long
+
+# Raw files the ingest skips, with the reason "excluded by config.yaml". The
+# files stay on disk (raw is immutable); only wiki synthesis skips them.
+ingest:
+  exclude: []
+
+# Linear depth. Initiatives listed here are DEEP: every issue, comment and
+# document is synced and ingested. The rest of the scope is LINK-ONLY: one
+# catalog row per project, never fetched in detail. Empty = everything deep.
+linear:
+  deep_initiatives: []
+
+# --------------------------------------------------------------------------
+# WIKI TAXONOMY: the entity types the synthesis layer organizes around.
+# The defaults suit a partnerships / solutions-architecture function. SWAP
+# THEM for what matters in yours. Examples:
 #   eng:     services, runbooks, postmortems, rfcs, dependencies, oncall
 #   biz-ops: accounts, processes, metrics, vendors, people, decisions
 #   pm:      features, personas, competitors, experiments, decisions, people
@@ -161,17 +177,17 @@ wiki:
     - workflows     # how-to recipes reconstructed from tribal knowledge
     - customers     # end customers with substantive context
 
-  # Promotion thresholds — when a raw mention earns its own wiki page.
+  # Promotion thresholds: when a raw mention earns its own wiki page.
   promotion:
     default_min_sources: 3      # partners/problems: 3+ raw sources
-    # Raised from 1 to 2 when Gmail landed. At 1, every vendor, recruiter and
-    # one-off contact who ever emailed you earns a wiki page and people/ floods.
+    # Raised from 1 to 2 for Gmail. At 1, every vendor, recruiter and one-off
+    # contact who ever emailed you earns a wiki page and people/ floods.
     # Set back to 1 only if you do NOT enable gmail.
     person_external_min: 2
     concept_min_references: 3
 
 # --------------------------------------------------------------------------
-# TAG NAMESPACES — the controlled vocabulary for frontmatter tags. Keep it
+# TAG NAMESPACES: the controlled vocabulary for frontmatter tags. Keep it
 # small and locked; lint flags anything outside these.
 # --------------------------------------------------------------------------
 tags:
@@ -179,17 +195,22 @@ tags:
     - "domain/"     # functional area
     - "problem/"    # problem archetype
     - "tech/"       # technology
-    # add your own, e.g. "partner/", "system/", "customer/", "team/"
+    - "partner/"
+    - "customer/"
+    - "system/"
+    - "integrator/"
+
+# Words too common in YOUR workspace to route an ingest entry to one page: the
+# company name, internal system names. Generic stop words are built in.
+route:
+  stop_words: []
 
 # --------------------------------------------------------------------------
-# OUTBOUND REVIEW GATE — the "acts like me on outbound comms" layer.
-# The kit ships a MECHANISM, not a personality. Declare your own rules here;
-# wiki/principles/ ships a worked example (someone else's voice) you delete or
-# overwrite. The core rule most people keep: never post directly — draft first.
+# OUTBOUND REVIEW GATE: the "acts like me on outbound comms" layer.
+# The kit ships a MECHANISM, not a personality. The core rule most people
+# keep: never post directly, draft first.
 # --------------------------------------------------------------------------
 outbound_gate:
-  # Where drafts go for your review before anything is sent anywhere.
   draft_destination: "self_dm"   # self_dm | file | stdout
   never_direct_post: true
-  # Path to your voice/style rules (a principles page you author).
   voice_rules: "wiki/principles/outbound-voice.md"
