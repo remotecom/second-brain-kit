@@ -4,8 +4,9 @@
 //
 //   discover  notion-search with the spec's signals, unioned by page id:
 //             last_edited_by me · created_by me · mentions (owner.name from config.yaml)
-//             (search needs a non-empty query; "the", "a" and "Remote" are
-//             used as catch-alls, measured 2026-10-01: "*" returns nothing)
+//             (search needs a non-empty query; sources.notion.search_terms
+//             are the catch-alls, e.g. "the", "a" and the company name;
+//             measured 2026-10-01: "*" returns nothing)
 //   detail    notion-fetch (page body + properties) + notion-get-comments
 //   render    existing raw format; body = the connector's enhanced markdown
 //   gate      sync.verify ─▶ sync.commit (hash skip) ─▶ watermark if complete
@@ -25,7 +26,6 @@ const { readPending, writePending } = require('./ledger');
 const { tool } = require('./connectors');
 
 const DAY = 86400000;
-const CATCHALL = ['the', 'a', 'Remote'];
 const COMMENT_TRIES = 3;
 const COMMENTS_UNFETCHED = `_Comments not fetched: the connector returned no result in ${COMMENT_TRIES} consecutive runs._`;
 
@@ -75,6 +75,9 @@ async function syncNotionMcp(run, ctx) {
   const { vault, logLine, finish, src } = ctx;
   const log = (s) => logLine(run, s);
   const T = (name) => tool(vault, 'notion', name);
+  // Notion search needs a query; common words find the owner's pages
+  // (config.yaml sources.notion.search_terms; a company name works well).
+  const CATCHALL = getConfig(vault).sources.notion.search_terms.map(String);
   let owner;
   try { owner = requireOwner(vault, ['notion_user_id', 'name']); } catch (e) { return finish(run, 'error', e.message); }
   const me = owner.notion_user_id;

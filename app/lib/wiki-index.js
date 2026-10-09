@@ -6,11 +6,11 @@
 const fs = require('fs');
 const path = require('path');
 
-const SECTION = {
-  partners: '## Partners', systems: '## Systems', integrators: '## Integrators', problems: '## Problems',
-  people: '## People', incidents: '## Incidents', initiatives: '## Initiatives', principles: '## Principles',
-  concepts: '## Concepts', workflows: '## Workflows', customers: '## Customers',
-};
+const { getConfig } = require('./config');
+
+// The index heading for each wiki section (config.yaml wiki.sections):
+// partners -> "## Partners".
+const sectionHeads = (vault) => Object.fromEntries(getConfig(vault).wiki.sections.map((s) => [String(s), `## ${String(s).charAt(0).toUpperCase()}${String(s).slice(1)}`]));
 const UNSORTED = '### Not yet sorted';
 
 function describe(text) {
@@ -23,6 +23,7 @@ function describe(text) {
 
 // Insert lines for `rels` (wiki/<dir>/<slug>.md) that the index lacks. Returns the added rels.
 function addToIndex(vault, rels) {
+  const SECTION = sectionHeads(vault);
   const idx = path.join(vault, 'wiki', 'index.md');
   let lines = fs.readFileSync(idx, 'utf8').split('\n');
   const has = (rel) => lines.some((l) => l.includes(`[[${rel.replace(/\.md$/, '')}]]`));

@@ -85,7 +85,13 @@ async function runMorning(run, ctx) {
     return r;
   };
 
-  for (const id of SYNC_ORDER) await step(id);
+  // A source turned off in config.yaml is skipped, and says so.
+  const srcs = getConfig(vault).sources;
+  for (const id of SYNC_ORDER) {
+    const key = id.replace('sync-', '');
+    if (srcs[key] && srcs[key].enabled === false) { logLine(run, `${id}: turned off in config.yaml, skipped`); steps.push(`${key} skipped`); continue; }
+    await step(id);
+  }
   await step('resolve', {}); // the owner's answers land before Brief and Ingest read the wiki
   await step('brief', {});
 

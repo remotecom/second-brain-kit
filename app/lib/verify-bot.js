@@ -20,12 +20,19 @@ const { spawn } = require('child_process');
 const { claudeCall } = require('./claude-call');
 const { addToIndex } = require('./wiki-index');
 const { script } = require('./kit');
+const { getConfig } = require('./config');
 const { entriesOf, entryKey, splitFrontmatter, fmField } = require('./ingest');
 
 const SPOT_N = 10;
 const SPOT_BUDGET = 2;
-const TAG_NS = /^(partner|domain|problem|tech|customer|system|integrator)\//;
-const WIKI_TYPES = new Set(['partner', 'system', 'integrator', 'problem', 'person', 'incident', 'initiative', 'principle', 'concept', 'workflow', 'customer']);
+// The taxonomy is config (wiki.sections, tags.namespaces). A section's
+// wiki_type is its singular: partners -> partner, people -> person.
+const singular = (s) => (s === 'people' ? 'person' : s.replace(/ies$/, 'y').replace(/s$/, ''));
+function taxonomy(vault) {
+  const c = getConfig(vault);
+  const ns = c.tags.namespaces.map((n) => String(n).replace(/\/?$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return { TAG_NS: new RegExp(`^(${ns.join('|')})\\/`), WIKI_TYPES: new Set(c.wiki.sections.map((s) => singular(String(s)))) };
+}
 const SUBSTANCE = /\b[A-Z]{2,6}-\d{2,5}\b|\b(decid|agreed|launch|go-live|deadline|blocked|approv|signed|priority|rollout|contract|renewal|pricing)\w*|\$\s?\d|\b\d{1,2}\/\d{1,2}\b/i;
 
 const sha7 = (s) => crypto.createHash('sha1').update(s).digest('hex').slice(0, 7);
@@ -50,6 +57,7 @@ function bash(file, cwd, args = []) {
 // --- deterministic checks -----------------------------------------------------
 
 function wikiChecks(vault) {
+  const { TAG_NS, WIKI_TYPES } = taxonomy(vault);
   const pages = walk(path.join(vault, 'wiki')).map((abs) => ({ abs, rel: path.relative(vault, abs) }))
     .filter((p) => !['wiki/index.md', 'wiki/log.md'].includes(p.rel));
   const index = fs.readFileSync(path.join(vault, 'wiki', 'index.md'), 'utf8');

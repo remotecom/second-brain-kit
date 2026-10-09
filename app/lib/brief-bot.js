@@ -74,9 +74,12 @@ function statusLines(vault, ctx) {
   }).filter(([, n]) => n);
   rows.push(`- wiki last ingested ${lastIngest ? ago(lastIngest) : 'never'}${pend.length ? ` · pending: ${pend.map(([s, n]) => `${n} ${s}`).join(', ')}` : ''}`);
   try {
-    const held = JSON.parse(read(path.join(vault, '.bot', 'state', 'ingest-held.json')) || '{}');
-    const keys = Object.keys(held);
-    if (keys.length) rows.push(`- ingest holding: ${keys.join(', ')}`);
+    // The ledger is a list of raw file paths (ingest.js writes it), held
+    // because their source's latest sync failed. Show the count per source.
+    const held = JSON.parse(read(path.join(vault, '.bot', 'state', 'ingest-held.json')) || '[]');
+    const per = {};
+    for (const f of Array.isArray(held) ? held : []) { const d = String(f).split('/')[0]; per[d] = (per[d] || 0) + 1; }
+    if (Object.keys(per).length) rows.push(`- ingest holding: ${Object.entries(per).map(([d, n]) => `${n} ${d}`).join(', ')}`);
   } catch {}
   return rows;
 }
@@ -309,4 +312,4 @@ async function runBrief(run, ctx) {
     { markdown: md, file: 'Brief.md', calendarRefresh: ctx.refreshed || null }, cost);
 }
 
-module.exports = { runBrief, parseEvents, owedFromMemory, buildPacket, checkCites };
+module.exports = { runBrief, parseEvents, owedFromMemory, buildPacket, checkCites, statusLines };
