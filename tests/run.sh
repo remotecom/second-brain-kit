@@ -180,10 +180,10 @@ rm -f "$VAULT_ROOT/$PROBE_GMAIL"
 # --- CLAUDE.md and config must not contradict each other -------------------
 # config.example.yaml ships person_external_min: 2 because Gmail floods
 # wiki/people/ at 1. CLAUDE.md used to hardcode "1 substantive thread".
-hasnt "CLAUDE.md does not hardcode the old external-person threshold of 1" \
-      "$(cat CLAUDE.md)" "External people (partner/vendor DRIs): \*\*1 substantive thread\*\*"
-has   "CLAUDE.md documents a Sync (Gmail) op (config.example.yaml points at it)" \
-      "$(cat CLAUDE.md)" "### Sync (Gmail)"
+hasnt "the vault CLAUDE.md template does not hardcode the old external-person threshold of 1" \
+      "$(cat templates/vault/CLAUDE.md)" "External people (partner/vendor DRIs): \*\*1 substantive thread\*\*"
+has   "the vault CLAUDE.md template documents a Sync (Gmail) op (config.example.yaml points at it)" \
+      "$(cat templates/vault/CLAUDE.md)" "### Sync (Gmail)"
 has   "config ships person_external_min: 2" "$(cat config.example.yaml)" "person_external_min: 2"
 
 # ===========================================================================
