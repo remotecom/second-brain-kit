@@ -19,7 +19,8 @@ const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').tr
 
 function linearTiers(vault, scope) {
   if (!scope) { try { scope = JSON.parse(fs.readFileSync(path.join(vault, 'linear', '.initiative-scope.json'), 'utf8')); } catch { scope = { initiatives: [], projects: [] }; } }
-  const roots = getConfig(vault).linear.deep_initiatives.map(String);
+  // A team scope has no initiative tree: everything in it is deep.
+  const roots = scope.team ? [] : getConfig(vault).linear.deep_initiatives.map(String);
   if (!roots.length) return { configured: false, isDeepProject: () => true, isDeepInitiative: () => true, deepProjects: scope.projects, linkProjects: [], linkWorkstreams: [], roots };
   // The subtree under each deep root.
   const kids = new Map();

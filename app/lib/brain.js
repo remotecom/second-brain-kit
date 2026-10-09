@@ -49,6 +49,7 @@ const { script } = require('./kit');
 const { tool, SETTINGS_URL } = require('./connectors');
 const { pressButtons, connectorVerdict } = require('./buttons');
 const doctor = require('./doctor');
+const { runRescope, staged: stagedScope } = require('./linear-scope');
 const { resolveVault, STATE_DIR: INSTALL_STATE_DIR } = require('./install');
 
 // The doctor's findings, cached briefly (the board polls every few seconds).
@@ -164,6 +165,11 @@ const BOTS = [
     id: 'morning', name: 'Morning run', kind: 'model',
     blurb: 'The scheduled chain: every sync, then Resolve (your Needs-You ticks), then Brief, then Ingest when due (60+ new files or 3+ days), then Verify after an ingest. Runs once a day at schedule.morning_at in config.yaml, or on wake if the laptop slept through it.',
     run: (run, claudeBin) => runMorning(run, { vault: VAULT, logLine, finish, isRunning, runBot: (id, body) => runBotAndWait(id, claudeBin, body) }),
+  },
+  {
+    id: 'rescope', name: 'Linear rescope', kind: 'model',
+    blurb: 'Rebuilds the set of Linear projects the sync covers (sources.linear.scope: an initiative and its sub-tree, or a team). Haiku presses the list buttons; code counts. Runs weekly in the Morning run.',
+    run: (run, claudeBin, body = {}) => runRescope(run, { claudeBin, vault: VAULT, env: claudeEnv(), logLine, finish }, body),
   },
   {
     id: 'health', name: 'Health', kind: 'model',
@@ -437,6 +443,19 @@ function todoFor(id) {
           : { label: 'Apply', kind: 'restructure-apply', slug: s.slug, confirm: `Apply the ${s.title} split? The old page is backed up first.` }],
       })),
     };
+  }
+  // A Linear scope that waits for the owner: the first one, or a blocked one.
+  if (id === 'rescope') {
+    const st = stagedScope(VAULT);
+    if (!st) return null;
+    const c = st.cross;
+    const counts = c ? `Walked ${c.walked} project(s); the cross-check counted ${c.union}${c.directKnown ? '' : ' (without the root\'s direct projects)'}.` : `Walked ${st.scope.project_count} project(s).`;
+    return st.blocked
+      ? { text: `The Linear rescope did not change the scope: ${(st.problems || []).join('; ')}`, items: [{ title: 'Linear scope', actions: [{ label: 'Retry', kind: 'run', slug: 'rescope' }] }] }
+      : { text: `${counts} ${st.scope.initiatives.length} initiative(s). Use this as the Linear scope?`, items: [{ title: 'Linear scope', actions: [
+        { label: 'Use this scope', kind: 'run', slug: 'rescope', body: { accept: true }, confirm: `Sync these ${st.scope.project_count} Linear projects from now on?` },
+        { label: 'Retry', kind: 'run', slug: 'rescope' },
+      ] }] };
   }
   // A sync that stopped because its connector is not connected.
   if (/^sync-/.test(id) || id === 'health') {

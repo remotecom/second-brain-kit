@@ -68,7 +68,9 @@ async function syncLinearMcp(run, ctx) {
   const scopePath = path.join(vault, 'linear', '.initiative-scope.json');
   let scope;
   try { scope = JSON.parse(fs.readFileSync(scopePath, 'utf8')); } catch { return finish(run, 'error', 'linear/.initiative-scope.json missing or unreadable; run a rescope first'); }
-  if (!scope.projects || scope.projects.length < 150) return finish(run, 'error', `scope looks truncated (${(scope.projects || []).length} projects, expected ~200); not syncing`);
+  // The rescope guards the scope (pages exhausted, >= 80% of the last good
+  // one; lib/linear-scope.js). Here only an empty scope stops the sync.
+  if (!scope.projects || !scope.projects.length) return finish(run, 'error', 'the Linear scope is empty; run Linear rescope');
 
   // Range: MIN(window, watermark), per the spec; bootstrap_days on the first run.
   const cfg = getConfig(vault);
@@ -104,7 +106,8 @@ async function syncLinearMcp(run, ctx) {
 
   // 2. Projects, documents, initiatives.
   const projFields = ['id', 'uuid', 'name', 'url', 'createdAt', 'updatedAt', 'completedAt', 'canceledAt', 'lead', 'leadTeam', 'status', 'initiatives'];
-  const prj = await collect(ctx, run, T('list_projects'), [{ args: { initiative: scope.root_id, updatedAt: threshold, includeArchived: true, limit: 50, fields: projFields } }], { pageOf: listPage('projects'), label: 'project list' });
+  const scopeArg = scope.team ? { team: scope.team } : { initiative: scope.root_id };
+  const prj = await collect(ctx, run, T('list_projects'), [{ args: { ...scopeArg, updatedAt: threshold, includeArchived: true, limit: 50, fields: projFields } }], { pageOf: listPage('projects'), label: 'project list' });
   cost += prj.cost; unfinished.push(...prj.unfinished); listFailed.push(...prj.unfinished);
   // list_projects ignores orderBy (spec, 2026-09-21), so filter client-side.
   const projects = [...prj.results.values()].flat().filter((p) => p.updatedAt >= threshold && (tiers.isDeepProject(p.id) || tiers.isDeepProject(p.name)));

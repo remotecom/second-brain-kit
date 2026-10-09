@@ -27,6 +27,7 @@ const path = require('path');
 const { getConfig } = require('./config');
 const T = require('./time');
 const { deltaWalk } = require('./ingest');
+const { scopeAgeDays } = require('./linear-scope');
 
 const TICK_MS = 5 * 60000;
 const SYNC_ORDER = ['sync-slack', 'sync-gcal', 'sync-linear', 'sync-notion', 'sync-gdrive'];
@@ -90,6 +91,8 @@ async function runMorning(run, ctx) {
   for (const id of SYNC_ORDER) {
     const key = id.replace('sync-', '');
     if (srcs[key] && srcs[key].enabled === false) { logLine(run, `${id}: turned off in config.yaml, skipped`); steps.push(`${key} skipped`); continue; }
+    // The Linear scope is rebuilt weekly, just before the Linear sync.
+    if (id === 'sync-linear' && scopeAgeDays(vault) > 7) await step('rescope', {});
     await step(id);
   }
   await step('resolve', {}); // the owner's answers land before Brief and Ingest read the wiki
