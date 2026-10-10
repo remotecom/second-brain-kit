@@ -29,9 +29,15 @@ const BOT_SETTINGS = path.resolve(__dirname, '..', 'bot-settings.json');
 const NO_MCP = '{"mcpServers":{}}';
 const DENY = 'Agent,Task,Write,Edit,NotebookEdit,Bash,WebFetch,WebSearch';
 
+// The environment for a claude child: no API key (it beats the claude.ai
+// login), and none of the markers a parent Claude Code session sets. Started
+// from a Claude terminal, the app inherits CLAUDECODE / CLAUDE_CODE_* and its
+// children then run as "child sessions" with transcript saving off (measured
+// 2026-10-09), which breaks --resume.
 function botEnv(base = process.env) {
   const env = { ...base };
   delete env.ANTHROPIC_API_KEY;
+  for (const k of Object.keys(env)) if (k === 'CLAUDECODE' || k.startsWith('CLAUDE_CODE_')) delete env[k];
   return env;
 }
 

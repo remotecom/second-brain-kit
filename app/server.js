@@ -52,6 +52,7 @@ const readBody = (req) => new Promise((resolve) => {
   req.on('end', () => { try { resolve(JSON.parse(b || '{}')); } catch { resolve({}); } });
 });
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png' };
+// A request for a vendored file under public/vendor is served like any other.
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -72,6 +73,26 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     json(res, 500, { error: e.message });
   }
+});
+
+// Sessions stream over a websocket. Browsers cannot set headers on one, so
+// the token rides in the URL; the Origin check still applies (OV-f).
+const { WebSocketServer } = require('./lib/vendor/ws');
+const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
+server.on('upgrade', (req, sock, head) => {
+  const url = new URL(req.url, `http://localhost:${PORT}`);
+  const s = brain && brain.sessions() && brain.sessions().get(url.searchParams.get('session') || '');
+  if (!ALLOWED.has(req.headers.origin || '') || url.searchParams.get('token') !== TOKEN || !s) { sock.destroy(); return; }
+  wss.handleUpgrade(req, sock, head, (ws) => {
+    s.clients.add(ws);
+    ws.send(JSON.stringify({ type: 'replay', data: s.replay, state: s.state, session: s.toJSON() }));
+    ws.on('message', (m) => {
+      let msg; try { msg = JSON.parse(String(m)); } catch { return; }
+      if (msg.type === 'in' && typeof msg.data === 'string') s.write(msg.data);
+      else if (msg.type === 'resize') s.resize(Math.max(20, Math.min(400, msg.cols | 0)), Math.max(5, Math.min(200, msg.rows | 0)));
+    });
+    ws.on('close', () => s.clients.delete(ws));
+  });
 });
 
 server.on('error', (e) => {

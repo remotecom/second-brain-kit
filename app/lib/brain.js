@@ -50,6 +50,8 @@ const { tool, SETTINGS_URL, HEALTH_CALLS, judgeResult } = require('./connectors'
 const { pressButtons, connectorVerdict } = require('./buttons');
 const doctor = require('./doctor');
 const setup = require('./setup');
+const { Sessions } = require('./sessions');
+let SESSIONS = null;
 const { runRescope, staged: stagedScope } = require('./linear-scope');
 const { resolveVault, STATE_DIR: INSTALL_STATE_DIR } = require('./install');
 
@@ -268,7 +270,8 @@ function start(claudeBin) {
   CLAUDE_BIN = claudeBin;
   heartbeat();
   setInterval(heartbeat, 60000).unref();
-  for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { releaseLock(); process.exit(0); });
+  if (claudeBin) SESSIONS = new Sessions({ vault: VAULT, stateDir: STATE_DIR, claudeBin });
+  for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { if (SESSIONS) SESSIONS.stopAll(); releaseLock(); process.exit(0); });
   process.once('exit', releaseLock);
   for (const f of doctorNow(true)) if (f.level !== 'info') console.log(`doctor ${f.level}: ${f.message}${f.fix ? ` Fix: ${f.fix}` : ''}`);
   if (!claudeBin) return;
@@ -553,7 +556,7 @@ function botsView() {
 
 async function handle(req, res, url, { json, readBody, claudeBin }) {
   const p = url.pathname;
-  if (!p.startsWith('/api/brain/') && !p.startsWith('/api/setup')) return false;
+  if (!p.startsWith('/api/brain/') && !p.startsWith('/api/setup') && !p.startsWith('/api/sessions')) return false;
 
   if (p === '/api/brain/chat' && req.method === 'POST') {
     const body = await readBody(req);
@@ -561,6 +564,27 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     if (!claudeBin) return json(res, 500, { error: 'claude CLI not found' }), true;
     json(res, 200, await chat(claudeBin, body));
     return true;
+  }
+
+  // --- Sessions (T19): real Claude Code in a pty, streamed over /ws.
+  if (p === '/api/sessions' && req.method === 'GET') return json(res, 200, { sessions: SESSIONS ? SESSIONS.list() : [], max: getConfig(VAULT).sessions.max_running }), true;
+  if (p === '/api/sessions' && req.method === 'POST') {
+    if (!SESSIONS) return json(res, 500, { error: 'claude CLI not found' }), true;
+    const b = await readBody(req);
+    const model = ['opus', 'sonnet', 'haiku'].includes(b.model) ? b.model : 'sonnet';
+    try { return json(res, 200, { session: SESSIONS.create({ title: b.title, kind: b.kind, item: b.item, model, prompt: String(b.prompt || '').slice(0, 20000), outcomes: b.outcomes, suggest: b.suggest }).toJSON() }), true; } catch (e) { return json(res, 400, { error: e.message }), true; }
+  }
+  const sm = p.match(/^\/api\/sessions\/([0-9a-f]{10})\/(open|sleep|close)$/);
+  if (sm && req.method === 'POST') {
+    const s = SESSIONS && SESSIONS.get(sm[1]);
+    if (!s) return json(res, 404, { error: 'no such session' }), true;
+    const b = await readBody(req);
+    try {
+      if (sm[2] === 'open') SESSIONS.open(s.id, b.cols, b.rows);
+      else if (sm[2] === 'sleep') s.sleep();
+      else s.finish(String(b.outcome || 'closed').slice(0, 80));
+    } catch (e) { return json(res, 400, { error: e.message }), true; }
+    return json(res, 200, { session: s.toJSON() }), true;
   }
 
   // --- Setup page (T14). Probes press buttons; code reads; saves edit config as text.
@@ -672,4 +696,4 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
   return true;
 }
 
-module.exports = { handle, start, VAULT };
+module.exports = { handle, start, VAULT, sessions: () => SESSIONS };

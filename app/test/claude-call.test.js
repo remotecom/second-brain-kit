@@ -53,3 +53,11 @@ test('no bot module builds its own claude flag list', () => {
     assert.ok(!/'--permission-prompts'/.test(src), `${f} passes --permission-prompts itself`);
   }
 });
+
+test('botEnv strips the markers a parent Claude Code session sets', () => {
+  const e = botEnv({ CLAUDECODE: '1', CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', CLAUDE_CONFIG_DIR: '/x', HOME: '/h' });
+  assert.equal(e.CLAUDECODE, undefined);
+  assert.equal(e.CLAUDE_CODE_CHILD_SESSION, undefined);
+  assert.equal(e.CLAUDE_CODE_ENTRYPOINT, undefined);
+  assert.equal(e.CLAUDE_CONFIG_DIR, '/x'); // other settings pass through
+});
