@@ -41,6 +41,10 @@ const NOT_SET_UP = `<!doctype html><meta charset="utf-8"><title>Second Brain</ti
 <h1>Second Brain is not set up yet</h1><p>Open Terminal and run:</p>
 <pre style="background:#111;padding:12px;border-radius:6px">${path.join(__dirname, 'bin', 'second-brain')} setup</pre>
 <p>Setup creates your vault, writes its settings and starts the app at login.</p></body>`;
+// DNS rebinding: a page on attacker.example can point its name at 127.0.0.1.
+// The browser then sends a same-origin GET (no Origin header) that would get
+// the token from index.html. So every request must name THIS server in Host.
+const HOSTS = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`]);
 const ALLOWED = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`]);
 
 const CLAUDE = install.findClaude();
@@ -55,6 +59,7 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 // A request for a vendored file under public/vendor is served like any other.
 
 const server = http.createServer(async (req, res) => {
+  if (!HOSTS.has(String(req.headers.host || '').toLowerCase())) { res.writeHead(421); return res.end('wrong host'); }
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const origin = req.headers.origin;
   if (origin && !ALLOWED.has(origin)) { res.writeHead(403); return res.end('cross-origin request refused'); }
@@ -82,7 +87,7 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 server.on('upgrade', (req, sock, head) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const s = brain && brain.sessions() && brain.sessions().get(url.searchParams.get('session') || '');
-  if (!ALLOWED.has(req.headers.origin || '') || url.searchParams.get('token') !== TOKEN || !s) { sock.destroy(); return; }
+  if (!HOSTS.has(String(req.headers.host || '').toLowerCase()) || !ALLOWED.has(req.headers.origin || '') || url.searchParams.get('token') !== TOKEN || !s) { sock.destroy(); return; }
   wss.handleUpgrade(req, sock, head, (ws) => {
     s.clients.add(ws);
     ws.send(JSON.stringify({ type: 'replay', data: s.replay, state: s.state, session: s.toJSON() }));

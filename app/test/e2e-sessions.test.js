@@ -125,3 +125,19 @@ test('the CLI: unknown bot, a busy bot, and a bad token', { skip, timeout: 60000
     assert.match(cli(["status"]).stderr, /refused the request/);
   } finally { await app.stop(); }
 });
+
+test('DNS rebinding: a request whose Host is not this server gets nothing (no token)', { skip, timeout: 60000 }, async () => {
+  const w = world();
+  const app = await server(w);
+  try {
+    const http = require('http');
+    const get = (host, p) => new Promise((res) => http.get({ host: '127.0.0.1', port: w.port, path: p, headers: { Host: host } }, (r) => { let b = ''; r.on('data', (d) => { b += d; }); r.on('end', () => res({ code: r.statusCode, body: b })); }));
+    const bad = await get(`attacker.example:${w.port}`, '/');
+    assert.equal(bad.code, 421);
+    assert.ok(!bad.body.includes(app.token));
+    assert.equal((await get(`attacker.example:${w.port}`, '/api/brain/needs')).code, 421);
+    const good = await get(`localhost:${w.port}`, '/');
+    assert.equal(good.code, 200);
+    assert.ok(good.body.includes(app.token));
+  } finally { await app.stop(); }
+});
