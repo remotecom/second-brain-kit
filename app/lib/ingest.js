@@ -354,12 +354,12 @@ function partPrompt(vault, part, k, n, ownerName, startIso) {
     '  - When an entry changes a fact (a date moved, a status changed, an option was decided), EDIT the old claim where it stands: replace it, or mark it "(superseded YYYY-MM-DD: <new fact>)". Two conflicting dates must not both stand unmarked.',
     '  - A page with a history companion (wiki/<dir>/<slug>-history.md exists) is a HUB: EDIT its "## Current state", "## Timeline" and "## Open questions" sections in place, and APPEND dated narrative ("### YYYY-MM-DD: <headline>") to the -history page, never to the hub.',
     '  - When an entry answers an open question, EDIT its "- [ ]" to "- [x]" with the answer in a few words.',
-    '  - A contradiction is two claims (wiki vs wiki, or wiki vs this raw) that disagree and that you could NOT resolve from the content. Only those go in "contradictions".',
+    '  - A contradiction is two claims (wiki vs wiki, or wiki vs this raw) that disagree and that you could NOT resolve from the content. Only those go in "contradictions". For each claim give where it is: "page" (the wiki page it concerns), "file" (the wiki page or raw file the words are in) and "quote" (the exact words, copied, under 300 characters). The runner checks every quote against its file.',
     `  - People: create or update wiki/people/ pages per the thresholds (an external partner DRI with one substantive thread; an internal person who engaged ${ownerName} directly). Calendar attendees with responseStatus accepted are who was in the room.`,
     '  - Recurring calendar instances with nothing new fold into one mention.',
     '',
     'Finish your reply with exactly one line, nothing after it:',
-    'MANIFEST: {"entries":{"E1":{"pages":["wiki/<path>.md"]},"E2":{"skip":"<why it adds nothing>"}},"contradictions":["<claim A vs claim B>"],"source_balance":["wiki/<path>.md: <why it cites one class or no human-authored class>"],"summary":"<one line>"}',
+    'MANIFEST: {"entries":{"E1":{"pages":["wiki/<path>.md"]},"E2":{"skip":"<why it adds nothing>"}},"contradictions":[{"text":"<claim A> vs <claim B>","a":{"page":"wiki/<path>.md","file":"<path>","quote":"<exact words>"},"b":{"page":"wiki/<path>.md","file":"<path>","quote":"<exact words>"}}],"source_balance":["wiki/<path>.md: <why it cites one class or no human-authored class>"],"summary":"<one line>"}',
     `Every entry ID (E1..E${part.entries.length}) must appear. "pages" lists every page you changed for that entry, and each must have a block in your reply.`,
     '',
     '================ THE OPERATION (from the vault CLAUDE.md; steps 0-2, 4 and 5 are the runner\'s) ================',
@@ -597,7 +597,11 @@ async function runIngest(run, { claudeBin, vault, env, logLine, finish, latestFo
   if (catalogPage) logLine(run, `rendered ${catalogPage} from linear/catalog.md`);
   // Every entry is accounted for (this run or an earlier one): log entry, then watermark.
   const pagesAll = [...new Set([...progress.notes.flatMap((x) => x.pages), ...(catalogPage ? [catalogPage] : [])])].sort();
-  const contradictions = [...new Set(progress.notes.flatMap((m) => m.contradictions))];
+  // Contradictions may carry their sources ({ text, a, b }); the quotes are
+  // checked against their files and stored for the Needs-You page (A7).
+  const cs = require('./claim-sources').recordFromManifest(vault, progress.notes.flatMap((m) => m.contradictions));
+  if (cs.kept || cs.dropped) logLine(run, `claim sources: ${cs.kept} checked, ${cs.dropped} dropped (quote not found in its file)`);
+  const contradictions = [...new Set(cs.texts)];
   const balance = [...new Set(progress.notes.flatMap((m) => m.source_balance))];
   const entrySkips = entries.filter((e) => (progress.entries[entryKey(e)] || {}).skip).length;
   const mfs = progress.notes;

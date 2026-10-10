@@ -280,8 +280,20 @@
         return `<div class="choice ${bx.on ? 'on' : ''}" data-need="${it.id}" data-label="${esc(bx.label)}">
           <span class="radio"></span><div><div class="cn">${esc(LABEL[bx.label] || bx.label)}</div>${detail}</div></div>`;
       };
-      return `<div class="card need"><div class="nid">${esc(isC ? 'Contradiction' : 'Possibly missing')} · ${esc(it.date)} · <span class="muted">${esc(it.id)}</span></div>
+      // Where each claim is written (A7): checked quotes with links. Older
+      // items, and items ingest gave no sources for, show their text only.
+      const src = it.sources;
+      const side = (k, n) => {
+        const x = src && src[k];
+        if (!x) return `<div class="claim"><div class="k">Claim ${n}</div><div class="muted">${claims ? esc(claims[n - 1]) : ''}</div></div>`;
+        return `<div class="claim"><div class="k">Claim ${n}</div>${x.quote ? `<blockquote>${esc(x.quote)}</blockquote>` : ''}
+          <div class="from">${x.page ? `<a href="${obsidian(x.page)}">${esc(x.page)}</a>` : ''}${x.file && x.file !== x.page ? ` · in <a href="${obsidian(x.file)}">${esc(x.file)}</a>` : ''}${x.line ? ` · line ${x.line}` : ''}</div></div>`;
+      };
+      const evidence = isC && src ? `<div class="claims">${side('a', 1)}${side('b', 2)}</div>` : '';
+      return `<div class="card need"><div class="nid">${esc(isC ? 'Contradiction' : 'Possibly missing')} · ${esc(it.date)} · <span class="muted">${esc(it.id)}</span>
+        <span class="spacer"></span><button class="ghost small" data-act="session" data-slug="needs" data-body="${esc(JSON.stringify({ id: it.id }))}" title="Open a Claude Code session that reads the sources and says which choice they support">Look into this</button></div>
         ${claims ? '' : `<div class="ntext doc">${render(it.text)}</div>`}
+        ${evidence}
         ${it.boxes.map(choice).join('')}</div>`;
     }).join('');
   }

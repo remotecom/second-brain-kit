@@ -105,6 +105,8 @@ async function runResolve(run, ctx) {
     const prev = same(item) ? state[item.id] : { attempts: 0 };
     const giveUp = !ok && prev.attempts + 1 >= MAX_ATTEMPTS;
     state[item.id] = { ...prev, choice: choiceOf(item), at: now, ok, done: ok || giveUp, attempts: prev.attempts + 1, result };
+    // Applied: the claim quotes are not needed any more; the links stay (A7).
+    if (ok) require('./claim-sources').dropQuotes(vault, item.id);
     if (giveUp) note(item, `Could not apply after ${MAX_ATTEMPTS} tries (${result}). Fix the page by hand, or tick a different box.`);
   };
 

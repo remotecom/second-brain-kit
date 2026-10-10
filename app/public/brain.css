@@ -138,3 +138,11 @@ button.tiny { padding: 1px 8px; font-size: 11px; }
 .sp-hint { font-size: 12px; padding: 4px 12px; }
 #sp-term { flex: 1; min-height: 0; padding: 6px; }
 button.suggest { background: var(--accent); color: #fff; box-shadow: 0 0 0 2px #1f3352; }
+
+/* Needs-You claims side by side (T23) */
+.card.need .nid { display: flex; align-items: center; gap: 8px; }
+.claims { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0 10px; }
+.claim { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; background: #161616; }
+.claim blockquote { margin: 4px 0 6px; padding-left: 10px; border-left: 3px solid #444; color: #ddd; font-size: 13px; }
+.claim .from { font-size: 12px; color: var(--muted); }
+.claim .from a { color: var(--accent); }

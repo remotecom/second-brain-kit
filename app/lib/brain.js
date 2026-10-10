@@ -685,7 +685,8 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
   }
 
   if (p === '/api/brain/needs' && req.method === 'GET') {
-    json(res, 200, { items: needsOpenItems() });
+    const CS = require('./claim-sources');
+    json(res, 200, { items: needsOpenItems().map((it) => ({ ...it, sources: it.id.startsWith('c-') ? CS.get(VAULT, it.id) : null })) });
     return true;
   }
 
