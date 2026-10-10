@@ -1,0 +1,77 @@
+# Release check (decision 14A)
+
+Run this before teammate #2 and before any release tag. It proves the kit
+installs and runs for a person who is not its author, on an account that has
+none of the author's files. Put the results in the PR description.
+
+Time: about 45 minutes, most of it waiting for the first run.
+
+## 1. A clean macOS account
+
+1. System Settings → Users & Groups → add a Standard user. Log in as that user.
+2. Install Node 18 or newer and Claude Code. Run `claude` and log in with a
+   claude.ai account (not an API key).
+3. In claude.ai → Settings → Connectors, connect Slack, Linear, Notion, Google
+   Calendar and Google Drive (only the ones the test needs).
+
+## 2. Install
+
+```bash
+git clone https://github.com/remotecom/second-brain-kit.git ~/second-brain-kit
+~/second-brain-kit/app/bin/second-brain setup --vault ~/SecondBrain
+```
+
+Check, and write down each result:
+
+- [ ] setup finished with no ✗ line, or each ✗ line named its fix
+- [ ] `~/Library/LaunchAgents/dev.secondbrain.app.plist` exists and starts the
+      app (`curl -s localhost:19300` answers)
+- [ ] the vault has `wiki/index.md`, `config.yaml`, `.gitignore`, and
+      `CLAUDE.md` starting with `<!-- kit:begin`
+
+## 3. The Setup page
+
+Open http://localhost:19300 → Setup. For each step, write down what happened.
+
+- [ ] Connectors: every connected source shows `ok`; a disconnected one says
+      "not connected" with the claude.ai link
+- [ ] You: Look me up fills the Slack member ID and the Notion user ID
+- [ ] Linear scope: search finds the initiative or team; Save; Run Linear
+      rescope; the first rescope asks to confirm the count; confirm it
+- [ ] Privacy: only the user's own calendar is ticked by default; the Meet
+      folders are locked out
+- [ ] Schedule: set a morning time; pick a usage share
+- [ ] Obsidian: with Obsidian closed, Apply writes `.obsidian/graph.json`
+- [ ] First run: 7 days; Start
+
+## 4. The first run
+
+- [ ] the Morning run ends `ok` or `warn` (never `error`); write down each step
+- [ ] Today shows the Brief, and "Bots today: X% of the week"
+- [ ] `second-brain doctor` prints "Nothing stops the bots"
+- [ ] a session opens: Setup → Repair in a session (or Vault chat → New chat)
+      shows Claude Code in the right panel; pick "Yes, I trust this folder"
+
+## 5. Usage measurement (OV2)
+
+The bots use the plan's limits. Write down, from Today's header and
+`.bot/state/usage.json`:
+
+| Run | Weekly use before | after | Bots' share of the week |
+|---|---|---|---|
+| first run (7-day back-fill) | | | |
+| a normal Morning run (next day) | | | |
+
+If a normal Morning run uses more than the `normal` share (about 5.7% of the
+week), say so in the PR: the default share, or the run, needs to change.
+
+## 6. Survives a restart
+
+- [ ] restart the Mac; log in; the app answers on localhost:19300 without
+      running anything by hand
+- [ ] the next Morning run starts by itself at the set time
+
+## 7. The gate to teammate #2 (OV8)
+
+- [ ] teammate #1 has a clean `second-brain doctor`
+- [ ] teammate #1 has had two clean Morning runs in a row

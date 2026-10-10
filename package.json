@@ -1,0 +1,13 @@
+{
+  "name": "second-brain-kit",
+  "private": true,
+  "description": "A personal knowledge base you run locally with Claude Code: syncs your work sources into markdown, keeps a wiki over them, and a control-room app that runs it all.",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=18" },
+  "bin": { "second-brain": "app/bin/second-brain" },
+  "scripts": {
+    "test": "bash tests/run.sh",
+    "start": "node app/server.js"
+  },
+  "dependencies": {}
+}
