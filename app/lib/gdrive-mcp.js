@@ -150,11 +150,20 @@ async function syncGdriveMcp(run, ctx) {
     for (const items of m.results.values()) for (const f of items) { cache[f.id] = { parentId: f.parentId || null, title: f.title || '' }; got++; }
     if (!got) break;
   }
+  const hits = new Set();
   for (const [id, x] of [...found]) {
     const c = chainOf(x.meta.parentId);
     if (c.unknown) { found.delete(id); counts.ancestry_unknown++; x.meta.reasons = [...x.reasons]; pendingNext.push(x.meta); continue; }
-    if (c.out.some((fid) => excludeIds.has(fid) || EXCLUDED_TITLES.has((cache[fid] || {}).title))) { found.delete(id); counts.excluded_by_folder_tree++; }
+    let hit = false;
+    for (const fid of c.out) {
+      if (excludeIds.has(fid)) { hits.add(`gdrive:id:${fid}`); hit = true; }
+      const t = (cache[fid] || {}).title;
+      if (EXCLUDED_TITLES.has(t)) { hits.add(`gdrive:title:${t}`); hit = true; }
+    }
+    if (hit) { found.delete(id); counts.excluded_by_folder_tree++; }
   }
+  // Which exclusions caught something this run (OV6: Verify flags a quiet one).
+  require('./exclusions').report(vault, [...[...excludeIds].map((x) => `gdrive:id:${x}`), ...[...EXCLUDED_TITLES].map((x) => `gdrive:title:${x}`)], hits);
 
   // 4. Pre-fetch skip: unchanged modifiedTime means an unchanged body.
   for (const [id, x] of [...found]) if (state[id] && state[id] === x.meta.modifiedTime && fs.existsSync(path.join(dir, 'files', `${id}.md`))) { found.delete(id); counts.prefetch_skipped++; }

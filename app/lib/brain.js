@@ -64,11 +64,17 @@ function doctorNow(force = false) {
   return doctorCache.findings;
 }
 // Before a bot runs: an error that names it stops it, with the fix.
-function gated(run, botId) {
+// A model bot also waits when today's usage share is spent (16A), unless the
+// owner starts it with force (the Your-move card's "Run anyway").
+function gated(run, botId, { force = false } = {}) {
   const blk = doctor.blockers(doctorNow(true), botId);
-  if (!blk.length) return true;
-  finish(run, 'error', `Setup issue: ${blk[0].message} ${blk[0].fix}`.trim(), { kind: 'setup', findings: blk });
-  return false;
+  if (blk.length) { finish(run, 'error', `Setup issue: ${blk[0].message} ${blk[0].fix}`.trim(), { kind: 'setup', findings: blk }); return false; }
+  const bot = BOTS.find((b) => b.id === botId);
+  if (!force && bot && bot.kind === 'model' && botId !== 'morning') {
+    const u = require('./usage').status(VAULT);
+    if (!u.ok) { finish(run, 'error', `Paused: ${u.why}. It continues tomorrow, or press Run anyway.`, { kind: 'usage', usage: u }); return false; }
+  }
+  return true;
 }
 const { dayOf } = require('./time');
 const BUTTON_SYNCS = { slack: syncSlackMcp, linear: syncLinearMcp, notion: syncNotionMcp, gcal: syncGcalMcp, gdrive: syncGdriveMcp };
@@ -284,7 +290,7 @@ async function runHealth(run, claudeBin) {
   const prompt = ['Health probe. Call each tool below exactly once with exactly these arguments (load each with ToolSearch "select:<tool>" first). Call nothing else. Do not repeat any result. Then reply DONE.',
     ...want.map((w) => `  ${w.t} ${JSON.stringify(w.args)}`)].join('\n');
   logLine(run, `probing ${want.length} connectors (haiku presses, code judges)…`);
-  const r = await pressButtons({ claudeBin, vault: CHAT_CWD, env: claudeEnv(), logLine }, run, prompt, 0.5, want.map((w) => w.t));
+  const r = await pressButtons({ claudeBin, vault: CHAT_CWD, usageVault: VAULT, env: claudeEnv(), logLine }, run, prompt, 0.5, want.map((w) => w.t));
   const status = {}, reasons = {};
   for (const w of want) {
     const c = r.calls.find((x) => x.name === w.t);
@@ -419,6 +425,17 @@ function todoFor(id) {
         { label: 'Use this scope', kind: 'run', slug: 'rescope', body: { accept: true }, confirm: `Sync these ${st.scope.project_count} Linear projects from now on?` },
         { label: 'Retry', kind: 'run', slug: 'rescope' },
       ] }] };
+  }
+  // A bot paused by the daily usage share.
+  {
+    const last = latestFor(id);
+    if (last && last.status === 'error' && last.detail && last.detail.kind === 'usage' && !require('./usage').status(VAULT).ok) {
+      const bot = BOTS.find((b) => b.id === id);
+      return { text: last.summary, items: [{ title: bot ? bot.name : id, actions: [
+        { label: 'Run anyway', kind: 'run', slug: id, body: { force: true }, confirm: 'Run it past today\'s usage share? It uses your plan\'s limits.' },
+        { label: 'Change the share', kind: 'goto', slug: 'setup' },
+      ] }] };
+    }
   }
   // A sync that stopped because its connector is not connected.
   if (/^sync-/.test(id) || id === 'health') {
@@ -679,7 +696,7 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
   if (p === '/api/brain/bots' && req.method === 'GET') {
     CLAUDE_BIN = CLAUDE_BIN || claudeBin;
     const setup = doctorNow().filter((f) => f.level !== 'info');
-    json(res, 200, { vault: VAULT, bots: botsView(), setup, update: kitUpdate, schedule: { ...scheduleSettings(VAULT), next: nextRun(VAULT) } });
+    json(res, 200, { vault: VAULT, bots: botsView(), setup, update: kitUpdate, usage: require('./usage').status(VAULT), schedule: { ...scheduleSettings(VAULT), next: nextRun(VAULT) } });
     return true;
   }
 
@@ -693,7 +710,7 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     const body = await readBody(req).catch(() => ({}));
     const run = newRun(bot);
     CLAUDE_BIN = CLAUDE_BIN || claudeBin;
-    if (gated(run, bot.id)) Promise.resolve(bot.run(run, claudeBin, body || {})).catch((e) => failRun(run, e));
+    if (gated(run, bot.id, { force: !!(body && body.force) })) Promise.resolve(bot.run(run, claudeBin, body || {})).catch((e) => failRun(run, e));
     json(res, 200, { runId: run.id });
     return true;
   }

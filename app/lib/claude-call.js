@@ -74,7 +74,7 @@ function botArgs(o) {
 function claudeStream(claudeBin, args, { cwd, env, timeoutMs, onEvent = () => {} }) {
   return new Promise((resolve) => {
     const child = spawn(claudeBin, args, { cwd, env: env || botEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
-    let buf = '', result = null, err = '';
+    let buf = '', result = null, err = '', rateFirst = null, rateLast = null;
     child.stdout.on('data', (c) => {
       buf += c;
       let i;
@@ -82,20 +82,24 @@ function claudeStream(claudeBin, args, { cwd, env, timeoutMs, onEvent = () => {}
         const line = buf.slice(0, i); buf = buf.slice(i + 1);
         if (!line.startsWith('{')) continue;
         let ev; try { ev = JSON.parse(line); } catch { continue; }
+        if (ev.type === 'rate_limit_event') { rateLast = ev.rate_limit_info; if (!rateFirst) rateFirst = rateLast; }
         if (ev.type === 'result') result = ev; else onEvent(ev);
       }
     });
     child.stderr.on('data', (c) => { err += c; });
     const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs || 30 * 60000);
     child.on('error', (e) => { err += String(e.message); });
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, result, stderr: err.slice(-2000) }); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ code, result, stderr: err.slice(-2000), rateFirst, rateLast }); });
   });
 }
 
 // One bot call. ctx = { claudeBin, vault, env }; o as botArgs, plus timeoutMs
 // and onEvent.
-function claudeCall(ctx, o) {
-  return claudeStream(ctx.claudeBin, botArgs(o), { cwd: o.cwd || ctx.vault, env: ctx.env || botEnv(), timeoutMs: o.timeoutMs, onEvent: o.onEvent });
+// Every call's plan usage is recorded (lib/usage.js) for the daily cap.
+async function claudeCall(ctx, o) {
+  const r = await claudeStream(ctx.claudeBin, botArgs(o), { cwd: o.cwd || ctx.vault, env: ctx.env || botEnv(), timeoutMs: o.timeoutMs, onEvent: o.onEvent });
+  try { require('./usage').record(ctx.usageVault || ctx.vault, r); } catch {}
+  return r;
 }
 
 module.exports = { claudeCall, claudeStream, botArgs, botEnv, BOT_SETTINGS, DENY };

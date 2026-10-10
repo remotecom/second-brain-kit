@@ -25,6 +25,7 @@
   let bots = [];
   let setup = [];
   let kitUpdate = null;
+  let usage = null;
   let sessions = [];
   let cmp = null; // restructure compare: { slug, data, sec: { i, before, after, ... } }
   let chatModel = store.get('brain.chatModel', 'sonnet');
@@ -88,6 +89,7 @@
     sched = r.schedule || {};
     setup = r.setup || [];
     kitUpdate = r.update || null;
+    usage = r.usage || null;
     try { const f = await api('/api/brain/file?path=Brief.md'); briefText = f.text || ''; } catch {}
     try { needs = (await api('/api/brain/needs')).items || []; } catch {}
     const known = new Set(GROUPS.flatMap((g) => g.bots));
@@ -183,7 +185,7 @@
     const list = todos();
     const m = byId('morning');
     const ml = m && m.last;
-    const head = `<h1>Today</h1><div class="sub">${ml ? `Last Morning run ${ago(ml.endedAt || ml.startedAt)} · <span class="pill ${status(m)}">${status(m)}</span>${ml.costUsd ? ` · $${ml.costUsd.toFixed(2)}` : ''}` : 'The Morning run has not run yet.'}</div>`;
+    const head = `<h1>Today</h1><div class="sub">${ml ? `Last Morning run ${ago(ml.endedAt || ml.startedAt)} · <span class="pill ${status(m)}">${status(m)}</span>` : 'The Morning run has not run yet.'}${usage ? ` · <span class="${usage.ok ? '' : 'warn'}" title="The bots use your claude.ai plan. This is the rise in the plan's weekly use during bot runs today; your own use at the same time counts too.">${esc(usage.text)}</span>` : ''}</div>`;
     const moves = list.length ? list.map(({ bot, todo }) => moveCard(bot, todo, true)).join('') : (setup.some((f) => f.level === 'error') ? '' : '<div class="empty">Nothing is waiting on you.</div>');
     const brief = briefText ? `<div class="card brief"><div class="k" style="color:var(--muted)">Today's brief</div><div class="doc">${render(briefText.replace(/^---[\s\S]*?---\n/, ''))}</div>
       <div class="row"><a href="${obsidian('Brief.md')}"><button class="ghost small">Open in Obsidian</button></a></div></div>` : '';

@@ -268,6 +268,15 @@ async function runVerify(run, ctx) {
     findings.push(`${touched.length} raw file(s) changed outside a sync (raw is immutable; the next sync of that source rewrites in-window files)`);
   } else log('raw: every file a sync wrote is unchanged since');
 
+  // 3d. Exclusions that caught nothing for 7 days (OV6), and ingest
+  // exclusions whose file is gone.
+  for (const q of require('./exclusions').quiet(vault, 7)) {
+    const what = q.key.replace(/^gdrive:(id|title):/, (m, k) => (k === 'id' ? 'Drive folder ID ' : 'Drive folder title '));
+    log(`exclusion quiet for 7+ days: ${what}${q.last ? ` (last hit ${q.last.slice(0, 10)})` : ' (never hit)'}`);
+    findings.push(`exclusion "${what}" excluded nothing for 7 days; check the folder still exists (a moved folder stops being excluded silently)`);
+  }
+  for (const rel of getConfig(vault).ingest.exclude.map(String)) if (!fs.existsSync(path.join(vault, rel))) findings.push(`ingest.exclude names ${rel}, which no longer exists`);
+
   // 4. Contradictions into Needs-You.md.
   const needsPath = path.join(vault, 'Needs-You.md');
   const items = parseNeedsYou(fs.existsSync(needsPath) ? fs.readFileSync(needsPath, 'utf8') : '');

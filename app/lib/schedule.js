@@ -75,12 +75,15 @@ async function runMorning(run, ctx) {
   const st = readState(vault);
   // Mark the day first, so a crash mid-chain does not re-run it every 5 minutes.
   writeState(vault, { ...st, lastMorning: localDay(vault), startedAt: new Date().toISOString() });
-  let cost = 0;
+  let cost = 0, paused = false;
   const steps = [];
   const step = async (id, body) => {
     if (isRunning(id)) { logLine(run, `${id}: already running, skipped`); steps.push(`${id} busy`); return null; }
+    if (paused) { steps.push(`${id.replace('sync-', '')} paused`); return null; }
     logLine(run, `${id}: starting`);
     const r = await runBot(id, body);
+    // Today's usage share is spent: the rest of the chain waits for tomorrow.
+    if (r.detail && r.detail.kind === 'usage') { paused = true; logLine(run, `paused: ${r.summary}`); }
     cost += r.costUsd || 0;
     logLine(run, `${id}: ${r.status} · ${r.summary}${r.costUsd ? ` · $${r.costUsd.toFixed(2)}` : ''}`);
     steps.push(`${id.replace('sync-', '')} ${r.status}`);
