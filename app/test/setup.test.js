@@ -118,3 +118,14 @@ test('a README.md in wiki/ or projects/ is not a page or a memory store', () => 
   const lint = spawnSync('/bin/bash', [path.join(__dirname, '..', '..', 'scripts', 'linkrot-lint.sh'), '--vault', vault], { encoding: 'utf8' }).stdout;
   assert.ok(!/NOTADIR/.test(lint), lint.split('\n').filter((l) => /NOTADIR/.test(l)).join('\n'));
 });
+
+test('the CLI has status and run, and deliberately no answer command (OV-a)', () => {
+  const home = fakeHome();
+  const r = run(home, ['answer', 'n-1', 'A']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /unknown command "answer"/);
+  const h = run(home, ['help']);
+  assert.match(h.stdout, /second-brain status/);
+  assert.match(h.stdout, /second-brain run <bot>/);
+  assert.match(run(home, ['run']).stderr, /which bot/);
+});

@@ -5,6 +5,8 @@
 //   second-brain setup         create a vault and start the app at login
 //   second-brain doctor        print what stops the bots, and the fixes
 //   second-brain migrate       move an existing vault onto this kit (--write applies)
+//   second-brain status        what runs, what waits on you (--json)
+//   second-brain run <bot>     start a bot in the app (--wait for the result)
 //
 // setup options (each is asked for when missing and a terminal is attached):
 //   --vault <dir>       the vault folder (required; there is no default)
@@ -34,7 +36,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) { o._.push(a); continue; }
     const [k, v] = a.slice(2).split('=');
-    if (['yes', 'no-login-item', 'write'].includes(k)) o[k] = true;
+    if (['yes', 'no-login-item', 'write', 'wait', 'json'].includes(k)) o[k] = true;
     else o[k] = v !== undefined ? v : argv[++i];
   }
   return o;
@@ -297,13 +299,63 @@ async function migrate(o) {
   out(`Undo: tar -xzf ${path.join(bdir, 'vault-files.tgz')} -C ${vault}  (and restore the plist from the same folder).`);
 }
 
+// --- status / run: a remote control for the running app (A4) ----------------------
+// Chat sessions (Claude Code, Cowork) use these instead of running app-owned
+// jobs themselves. There is deliberately NO `answer` command (OV-a): Needs-You
+// answers are written only by a click in the app, so instructions hidden in
+// synced text cannot tick an answer.
+async function appApi(p, opt = {}) {
+  const port = install.port();
+  let token = '';
+  try { token = fs.readFileSync(path.join(install.STATE_DIR, 'token'), 'utf8').trim(); } catch { fail('the app has never run here (no token). Start it: second-brain'); }
+  let res;
+  try {
+    res = await fetch(`http://127.0.0.1:${port}${p}`, { ...opt, headers: { 'Content-Type': 'application/json', 'X-Brain-Token': token, Origin: `http://localhost:${port}` } });
+  } catch { fail(`the app is not running on port ${port}. Start it: second-brain`); }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok && body.error) fail(body.error);
+  return body;
+}
+
+const ago = (iso) => { if (!iso) return 'never'; const s = (Date.now() - Date.parse(iso)) / 1000; return s < 90 ? 'just now' : s < 5400 ? `${Math.round(s / 60)}m ago` : s < 129600 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`; };
+
+async function statusCmd(o) {
+  const j = await appApi('/api/brain/bots');
+  if (o.json) { out(JSON.stringify({ schedule: j.schedule, setup: j.setup, bots: j.bots.map((b) => ({ id: b.id, status: b.last ? b.last.status : 'never', summary: b.last ? b.last.summary : '', ended: b.last ? b.last.endedAt : null, waiting: b.todo ? b.todo.text : null })) }, null, 2)); return; }
+  out(`Morning run: ${j.schedule.enabled ? `${j.schedule.morningAt}, next ${j.schedule.next}` : 'off'}`);
+  const running = j.bots.filter((b) => b.last && b.last.status === 'running');
+  out(`Running now: ${running.length ? running.map((b) => b.id).join(', ') : 'nothing'}`);
+  const waiting = j.bots.filter((b) => b.todo);
+  out(`Waiting on the owner: ${waiting.length ? '' : 'nothing'}`);
+  for (const b of waiting) out(`  - ${b.name}: ${b.todo.text}`);
+  for (const f of j.setup.filter((x) => x.level === 'error')) out(`  - Setup: ${f.message}`);
+  out('\nBots:');
+  for (const b of j.bots) out(`  ${b.id.padEnd(14)} ${(b.last ? b.last.status : 'never').padEnd(8)} ${b.last ? `${ago(b.last.endedAt || b.last.startedAt).padEnd(9)} ${String(b.last.summary || '').slice(0, 90)}` : ''}`);
+}
+
+async function runCmd(o) {
+  const id = o._[1];
+  if (!id) fail('which bot? e.g. second-brain run sync-slack  (see: second-brain status)');
+  if (!/^[a-z-]+$/.test(id)) fail(`bad bot name "${id}"`);
+  const r = await appApi(`/api/brain/bots/${id}/run`, { method: 'POST', body: '{}' });
+  out(`started ${id} (run ${r.runId}). Follow it in the app's Log${o.wait ? '; waiting…' : ', or add --wait'}.`);
+  if (!o.wait) return;
+  for (;;) {
+    await new Promise((res) => setTimeout(res, 5000));
+    const b = (await appApi('/api/brain/bots')).bots.find((x) => x.id === id);
+    if (b && b.last && b.last.id === r.runId && b.last.status !== 'running') { out(`${b.last.status}: ${b.last.summary}`); if (b.last.status === 'error') process.exitCode = 1; return; }
+  }
+}
+
 async function main() {
   const o = parseArgs(process.argv.slice(2));
   const cmd = o._[0] || 'open';
   if (cmd === 'setup') return setup(o);
   if (cmd === 'doctor') return doctorCmd();
   if (cmd === 'migrate') return migrate(o);
-  if (cmd === 'help' || cmd === '--help') { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 18).map((l) => l.replace(/^\/\/ ?/, '')).join('\n')); return; }
+  if (cmd === 'status') return statusCmd(o);
+  if (cmd === 'run') return runCmd(o);
+  if (cmd === 'help' || cmd === '--help') { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 20).map((l) => l.replace(/^\/\/ ?/, '')).join('\n')); return; }
   fail(`unknown command "${cmd}". Try: second-brain help`);
 }
 
