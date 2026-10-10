@@ -133,7 +133,7 @@ const pick3 = (text) => {
   };
 };
 
-async function stage(run, ctx, rel) {
+async function stage(run, ctx, rel, comments) {
   const { vault, logLine } = ctx;
   const log = (s) => logLine(run, s);
   const today = new Date().toLocaleDateString('en-CA'); // the owner's local date, not UTC
@@ -173,7 +173,11 @@ async function stage(run, ctx, rel) {
   const related = merged(/^Related/i), sources = merged(/^Sources/i);
 
   // The model's three sections.
-  const prompt = SYNTH(name, histRel, today, [...histHeads]) + body;
+  // The owner's comments from the compare view, per section, if this is a re-stage.
+  const notes = comments && Object.keys(comments).length
+    ? `\nThe owner reviewed an earlier version of this split and asked for these changes. Follow them in the three sections you write:\n${Object.entries(comments).map(([h, t]) => `- On "${h}": ${t}`).join('\n')}\n\n`
+    : '';
+  const prompt = SYNTH(name, histRel, today, [...histHeads]) + notes + body;
   log(`asking opus for Current state / Timeline / Open questions (${Math.round(prompt.length / 1024)}KB in)…`);
   const r = await claudeCall({ claudeBin: ctx.claudeBin, vault, env: ctx.env }, {
     prompt, model: 'opus', tools: 'Read,Grep,Glob', allowed: 'Read(./wiki/**),Grep,Glob',
@@ -261,7 +265,7 @@ async function runRestructure(run, ctx, body = {}) {
   const log = (s) => logLine(run, s);
   const root = path.join(vault, '.bot', 'restructure');
   // 1. A staged restructure: apply it if ticked, else wait for the owner.
-  const staged = fs.existsSync(root) ? fs.readdirSync(root).filter((d) => !d.includes('-applied-') && fs.existsSync(path.join(root, d, 'report.md'))) : [];
+  const staged = fs.existsSync(root) ? fs.readdirSync(root).filter((d) => !d.includes('-applied-') && !d.includes('-stale-') && fs.existsSync(path.join(root, d, 'report.md'))) : [];
   for (const d of staged) {
     const dir = path.join(root, d);
     const rep = read(path.join(dir, 'report.md'));
@@ -279,7 +283,7 @@ async function runRestructure(run, ctx, body = {}) {
   if (!target) return finish(run, 'ok', `no wiki page over ${MIN_BYTES / 1000}KB without a history companion`);
   if (!fs.existsSync(path.join(vault, target))) return finish(run, 'error', `no such page: ${target}`);
   try {
-    const r = await stage(run, ctx, target);
+    const r = await stage(run, ctx, target, body.comments);
     finish(run, 'warn', `staged ${target}: hub ${r.hubKB}KB + history ${r.histKB}KB. Review ${r.dir}/ and tick "apply" in report.md, then run Restructure again`, r, r.cost);
   } catch (e) {
     finish(run, 'error', e.message, null, e.cost || 0);

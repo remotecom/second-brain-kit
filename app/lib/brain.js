@@ -360,7 +360,8 @@ function stagedRestructures() {
   const root = path.join(VAULT, RESTRUCTURE_DIR);
   if (!fs.existsSync(root)) return [];
   return fs.readdirSync(root)
-    .filter((d) => !d.includes('-applied-') && fs.existsSync(path.join(root, d, 'report.md')))
+    // -applied- and -stale- folders are finished stagings, kept for the record.
+    .filter((d) => !d.includes('-applied-') && !d.includes('-stale-') && fs.existsSync(path.join(root, d, 'report.md')))
     .map((slug) => {
       const rep = fs.readFileSync(path.join(root, slug, 'report.md'), 'utf8');
       const title = (rep.match(/^# Restructure: (.+)$/m) || [])[1] || slug;
@@ -390,9 +391,11 @@ function todoFor(id) {
         title: s.title,
         note: s.stale ? `${s.sizes} OUT OF DATE: ingest changed the page after this was staged. Re-stage (Opus, ~$1.40) to review the current version.` : s.sizes,
         files: ['report.md', 'hub.md', 'history.md'].map((f) => ({ label: f.replace('.md', ''), path: path.join(RESTRUCTURE_DIR, s.slug, f) })),
-        actions: [s.stale
-          ? { label: 'Re-stage', kind: 'restructure-apply', slug: s.slug, confirm: `Re-stage ${s.title} from the current page? Opus, about $1.40. Nothing is applied yet.` }
-          : { label: 'Apply', kind: 'restructure-apply', slug: s.slug, confirm: `Apply the ${s.title} split? The old page is backed up first.` }],
+        actions: [
+          { label: 'Compare', kind: 'compare', slug: s.slug },
+          s.stale
+            ? { label: 'Re-stage', kind: 'restructure-apply', slug: s.slug, confirm: `Re-stage ${s.title} from the current page? Opus, about $1.40. Nothing is applied yet.` }
+            : { label: 'Apply', kind: 'restructure-apply', slug: s.slug, confirm: `Apply the ${s.title} split? The old page is backed up first.` }],
       })),
     };
   }
@@ -696,6 +699,28 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     try { answerNeed(String(body.id || ''), String(body.label || '')); } catch (e) { return json(res, 400, { error: e.message }), true; }
     json(res, 200, { items: needsOpenItems() });
     return true;
+  }
+
+  // --- Restructure compare (T24): built by code from the staged files.
+  const rc = p.match(/^\/api\/brain\/restructure\/([\w.-]+)\/(compare|section|comment|restage)$/);
+  if (rc) {
+    const RC = require('./restructure-compare');
+    const slug = rc[1];
+    try {
+      if (rc[2] === 'compare' && req.method === 'GET') return json(res, 200, RC.compare(VAULT, slug)), true;
+      if (rc[2] === 'section' && req.method === 'GET') return json(res, 200, RC.section(VAULT, slug, url.searchParams.get('i'))), true;
+      if (rc[2] === 'comment' && req.method === 'POST') { const b = await readBody(req); return json(res, 200, { comments: RC.saveComment(VAULT, slug, b.head, b.text) }), true; }
+      if (rc[2] === 'restage' && req.method === 'POST') {
+        if (isRunning('restructure')) return json(res, 409, { error: 'Restructure is already running' }), true;
+        const { rel } = RC.compare(VAULT, slug);
+        let comments = {}; try { comments = JSON.parse(fs.readFileSync(path.join(VAULT, RESTRUCTURE_DIR, slug, 'comments.json'), 'utf8')); } catch {}
+        fs.renameSync(path.join(VAULT, RESTRUCTURE_DIR, slug), path.join(VAULT, RESTRUCTURE_DIR, `${slug}-stale-${Date.now()}`));
+        const bot = BOTS.find((b) => b.id === 'restructure');
+        const run = newRun(bot);
+        if (gated(run, 'restructure')) Promise.resolve(bot.run(run, claudeBin, { page: rel, comments })).catch((e) => failRun(run, e));
+        return json(res, 200, { runId: run.id }), true;
+      }
+    } catch (e) { return json(res, 400, { error: e.message }), true; }
   }
 
   if (p === '/api/brain/restructure/apply' && req.method === 'POST') {

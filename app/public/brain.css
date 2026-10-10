@@ -146,3 +146,24 @@ button.suggest { background: var(--accent); color: #fff; box-shadow: 0 0 0 2px #
 .claim blockquote { margin: 4px 0 6px; padding-left: 10px; border-left: 3px solid #444; color: #ddd; font-size: 13px; }
 .claim .from { font-size: 12px; color: var(--muted); }
 .claim .from a { color: var(--accent); }
+
+/* restructure compare (T24) */
+.sizes { margin: 6px 0 12px; font-size: 13px; }
+.sizebar { display: flex; height: 12px; border-radius: 3px; overflow: hidden; background: #222; margin: 3px 0 8px; max-width: 900px; }
+.sizebar span { display: block; height: 100%; }
+.sizebar .old, .sw.stay, .sizebar .stay { background: #6b6b6b; }
+.sizebar .move, .sw.move { background: #4a9eff; }
+.sizebar .new, .sw.new { background: #3fb950; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 6px 0 0; vertical-align: -1px; }
+.legend { font-size: 12px; color: var(--muted); }
+.legend .sw { margin-left: 10px; }
+.cmp-grid { display: grid; grid-template-columns: minmax(320px, 1fr) 1.2fr; gap: 14px; }
+.cmp-grid table.t { max-height: 520px; overflow-y: auto; display: block; }
+.cmp-grid tr { cursor: pointer; }
+.cmp-grid tr:hover td { background: var(--hover); }
+.cmp-grid tr.sel td { background: #1f3352; }
+td.small { font-size: 11px; }
+.ba { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ba pre { white-space: pre-wrap; font-size: 12px; max-height: 360px; overflow-y: auto; background: #111; border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin: 4px 0; }
+.ba pre.changed { border-color: #5a4a22; }
+textarea { background: #111; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; flex: 1; min-width: 300px; }

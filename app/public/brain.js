@@ -25,6 +25,7 @@
   let bots = [];
   let setup = [];
   let sessions = [];
+  let cmp = null; // restructure compare: { slug, data, sec: { i, before, after, ... } }
   let chatModel = store.get('brain.chatModel', 'sonnet');
   let transcript = null; // { id, lines } on the Sessions page
   let sched = {};
@@ -233,6 +234,7 @@
       <div class="summary">${esc(sum)}</div>
       ${b.todo && b.id !== 'resolve' ? moveCard(b, b.todo, false) : ''}
       ${preview && preview.botId === b.id ? previewBlock() : ''}
+      ${b.id === 'restructure' && cmp ? compareBlock() : ''}
       ${b.id === 'resolve' ? needsBlock() : ''}
       <div class="what"><b>What it does.</b> ${esc(b.blurb)}</div>`;
   }
@@ -298,6 +300,36 @@
     }).join('');
   }
 
+  // T24: what the staged split does, section by section. Built by code from
+  // the staged files; the model wrote only the green summary sections.
+  function compareBlock() {
+    const d = cmp.data;
+    if (!d) return '<div class="card">Loading the comparison…</div>';
+    const kb = (n) => `${Math.round(n / 1024)}KB`;
+    const max = Math.max(d.sizes.old, d.sizes.hub + d.sizes.history);
+    const bar = (parts) => `<div class="sizebar">${parts.map(([w, c, t]) => `<span class="${c}" style="width:${(100 * w / max).toFixed(2)}%" title="${esc(t)}"></span>`).join('')}</div>`;
+    const color = { hub: 'stay', history: 'move', merged: 'stay', new: 'new' };
+    const rows = d.sections.map((s) => `<tr class="${cmp.sec && String(cmp.sec.i) === String(s.i) ? 'sel' : ''}" data-cmp-sec="${esc(String(s.i))}">
+        <td><span class="sw ${s.kind === 'new' ? 'new' : color[s.goes]}"></span>${esc(s.head)}</td><td class="muted">${esc(s.kind === 'new' ? 'new on hub' : s.goes === 'history' ? 'moves' : s.goes === 'merged' ? 'merged' : 'stays')}</td>
+        <td class="muted">${kb(s.bytes)}</td><td>${d.comments[s.head] ? '💬' : ''}</td></tr>`).join('');
+    const sec = cmp.sec;
+    const why = sec && (d.sections.find((x) => String(x.i) === String(sec.i)) || {}).why;
+    const detail = !sec ? '<div class="muted">Pick a section to see it before and after.</div>' : `
+      <div class="n"><b>${esc(sec.head)}</b>: ${esc(why || '')}</div>
+      <div class="ba"><div><div class="k">Before (old page)</div><pre>${esc(sec.before || '(new)')}</pre></div>
+      <div><div class="k">After (${esc(sec.where)})${sec.same ? ' · identical' : ''}</div><pre class="${sec.same ? '' : 'changed'}">${esc(sec.after || '(not found)')}</pre></div></div>
+      ${sec.missing && sec.missing.length ? `<p class="warn">${sec.missing.length} line(s) of this section are not on the new page.</p>` : ''}
+      <div class="row"><textarea data-cmp-comment="${esc(sec.head)}" rows="2" placeholder="A comment on this section, for the re-stage (it goes to the summary writer)">${esc(d.comments[sec.head] || '')}</textarea><button class="small ghost" data-cmp-save>Save comment</button></div>`;
+    return `<div class="card compare"><div class="k" style="color:var(--muted)">Compare · ${esc(d.rel)}</div>
+      <div class="sizes"><div><span class="muted">Old page</span> ${kb(d.sizes.old)}</div>${bar([[d.sizes.old, 'old', 'old page']])}
+      <div><span class="muted">After</span> hub ${kb(d.sizes.hub)} + history ${kb(d.sizes.history)}</div>${bar([[d.stays, 'stay', 'stays on the hub'], [d.added, 'new', 'new summary'], [d.moves, 'move', 'moves to history']])}
+      <div class="legend"><span class="sw stay"></span>stays ${kb(d.stays)} <span class="sw move"></span>moves ${kb(d.moves)} <span class="sw new"></span>new ${kb(d.added)}</div></div>
+      <div class="cmp-grid"><table class="t"><tbody>${rows}</tbody></table><div class="cmp-detail">${detail}</div></div>
+      <div class="row"><button class="small ghost" data-act="session" data-slug="restructure" data-body="${esc(JSON.stringify({ slug: cmp.slug }))}">Ask about this change</button>
+      <button class="small ghost" data-cmp-restage ${Object.keys(d.comments).length ? '' : 'disabled'}>Re-stage with my comments (${Object.keys(d.comments).length})</button>
+      <button class="small ghost" data-cmp-close>Close compare</button></div></div>`;
+  }
+
   function previewBlock() {
     return `<div class="preview"><div class="tabs"><b>${esc(preview.path)}</b><span class="spacer"></span><button class="ghost small" data-close-preview>Close</button></div>
       <div class="doc">${render(String(preview.text).replace(/^---\n[\s\S]*?\n---\n/, ''))}</div></div>`;
@@ -357,6 +389,12 @@
     if (a && a.dataset.act === 'goto') return select(a.dataset.slug);
     // Only https links to claude.ai open from a card (the connector settings).
     if (a && a.dataset.act === 'open-url') { if (/^https:\/\/claude\.ai\//.test(a.dataset.url)) window.open(a.dataset.url, '_blank', 'noopener'); return; }
+    if (a && a.dataset.act === 'compare') {
+      cmp = { slug: a.dataset.slug, data: null, sec: null }; lastPage = ''; paint();
+      cmp.data = await api(`/api/brain/restructure/${encodeURIComponent(a.dataset.slug)}/compare`);
+      if (cmp.data.error) { alert(cmp.data.error); cmp = null; }
+      lastPage = ''; return paint();
+    }
     if (a && a.dataset.act === 'session') {
       let item = {}; try { item = JSON.parse(a.dataset.body || '{}'); } catch {}
       return window.SessionPanel.start(a.dataset.slug, item);
@@ -386,6 +424,13 @@
         $('#drawer').hidden = false; store.set('brain.drawer', true);
       }
       return load();
+    }
+    if (cmp) {
+      const row = t.closest('[data-cmp-sec]');
+      if (row) { const sec = await api(`/api/brain/restructure/${encodeURIComponent(cmp.slug)}/section?i=${encodeURIComponent(row.dataset.cmpSec)}`); const meta = cmp.data.sections.find((x) => String(x.i) === row.dataset.cmpSec); cmp.sec = { i: row.dataset.cmpSec, head: meta.head, ...sec }; lastPage = ''; return paint(); }
+      if (t.closest('[data-cmp-save]')) { const ta = document.querySelector('[data-cmp-comment]'); const r = await api(`/api/brain/restructure/${encodeURIComponent(cmp.slug)}/comment`, { method: 'POST', body: JSON.stringify({ head: ta.dataset.cmpComment, text: ta.value }) }); if (r.error) alert(r.error); else cmp.data.comments = r.comments; lastPage = ''; return paint(); }
+      if (t.closest('[data-cmp-restage]')) { if (!confirm('Re-stage with your comments? Opus writes the summary again (about $1.40). Nothing is applied yet.')) return; const r = await api(`/api/brain/restructure/${encodeURIComponent(cmp.slug)}/restage`, { method: 'POST', body: '{}' }); if (r.error) alert(r.error); cmp = null; $('#drawer').hidden = false; return load(); }
+      if (t.closest('[data-cmp-close]')) { cmp = null; lastPage = ''; return paint(); }
     }
     const so = t.closest('[data-session]');
     if (so) return window.SessionPanel.openId(so.dataset.session);
