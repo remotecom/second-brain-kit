@@ -167,3 +167,15 @@ td.small { font-size: 11px; }
 .ba pre { white-space: pre-wrap; font-size: 12px; max-height: 360px; overflow-y: auto; background: #111; border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin: 4px 0; }
 .ba pre.changed { border-color: #5a4a22; }
 textarea { background: #111; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; flex: 1; min-width: 300px; }
+
+/* session panel: resize grip, done bar, reopen tab; the page keeps a usable width */
+#spanel { position: relative; max-width: calc(100% - 420px); }
+#page { min-width: 300px; }
+.sp-grip { position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 5; }
+.sp-grip:hover, body.sp-dragging .sp-grip { background: var(--accent); opacity: .5; }
+body.sp-dragging { cursor: col-resize; user-select: none; }
+body.sp-dragging #sp-term { pointer-events: none; }
+.sp-done { padding: 8px 12px; background: #16301d; color: var(--ok); border-bottom: 1px solid var(--line); font-size: 13px; }
+#sp-tab { position: fixed; right: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; border-radius: 6px 0 0 6px; padding: 12px 6px; font-size: 12px; max-height: 60vh; overflow: hidden; z-index: 20; }
+#sp-tab[hidden] { display: none; }
+.card.look .row { margin-top: 6px; }

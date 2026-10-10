@@ -77,7 +77,11 @@
   }
   const todos = () => bots.filter((b) => b.todo).map((b) => ({ bot: b, todo: b.todo }));
 
-  window.SessionPanel.init({ api, esc: (x) => esc(x), onChange: (showLog) => { if (showLog) { $('#drawer').hidden = false; store.set('brain.drawer', true); } load(); } });
+  // After a session ends, go to the page its result shows on.
+  const DONE_PAGE = { restructure: () => 'restructure', needs: () => 'resolve', repair: () => 'today', connector: (s) => s.item && s.item.bot, findings: (s) => s.item && s.item.bot };
+  window.SessionPanel.init({ api, esc: (x) => esc(x),
+    onChange: (showLog) => { if (showLog && !document.body.classList.contains('with-spanel')) { $('#drawer').hidden = false; store.set('brain.drawer', true); } load(); },
+    onDone: (s) => { const f = s && DONE_PAGE[s.kind]; const id = f && f(s); if (id) { cmp = null; select(id); } } });
 
   // --- data ---
   async function load() {
@@ -240,15 +244,38 @@
     const l = b.last;
     const st = status(b);
     const sub = l ? `Last run ${ago(l.endedAt || l.startedAt)}${l.costUsd ? ` · $${l.costUsd.toFixed(2)}` : ''}` : 'Never run';
-    const sum = st === 'running' ? 'Running now. Open the log to watch it.' : l ? l.summary : (b.kind === 'later' ? 'Designed, not built yet.' : 'Press Run to try it.');
+    const sum = st === 'running' ? (RUNNING[b.id] || 'Running now. The log on the right shows each step.') : l ? l.summary : (b.kind === 'later' ? 'Designed, not built yet.' : 'Press Run to try it.');
     return `<h1>${esc(b.name)} <span class="pill ${st}">${st}</span><span class="spacer"></span>${runButton(b)}</h1>
       <div class="sub">${esc(sub)}</div>
       <div class="summary">${esc(sum)}</div>
       ${b.todo && b.id !== 'resolve' ? moveCard(b, b.todo, false) : ''}
+      ${lookCard(b)}
       ${preview && preview.botId === b.id ? previewBlock() : ''}
       ${b.id === 'restructure' && cmp ? compareBlock() : ''}
       ${b.id === 'resolve' ? needsBlock() : ''}
       <div class="what"><b>What it does.</b> ${esc(b.blurb)}</div>`;
+  }
+
+  // What a long run is doing, in words, while it runs.
+  const RUNNING = {
+    restructure: 'Staging the split now. Opus writes the new Current state, Timeline and Open questions (about 2 minutes). When it is done, a "Your move" card appears here with Compare. Nothing is applied until you press Apply.',
+    ingest: 'Folding new raw files into the wiki, part by part. The log on the right shows each part.',
+  };
+
+  // A run that ended warn or error: a place to talk it through, and the way on.
+  function lookCard(b) {
+    const l = b.last;
+    if (!l || status(b) === 'running' || !['warn', 'error'].includes(l.status) || b.id === 'restructure' || b.id === 'resolve') return '';
+    const nC = /(\d+) contradiction/.exec(l.summary || '');
+    const toNeeds = (b.id === 'ingest' && nC) || b.id === 'verify';
+    return `<div class="card look"><div class="k">Your move</div>
+      <div>${b.id === 'ingest' && nC ? `Ingest found ${esc(nC[1])} contradiction(s). Verify puts them in Needs-You (it runs in the Morning run, or press Run on Verify). You answer them on the Resolve page.`
+        : b.id === 'verify' ? 'Verify\'s findings are in Needs-You. You answer them on the Resolve page.'
+        : `This run ended with "${esc(l.status)}". Open a session to go through what it found.`}</div>
+      <div class="row">
+        ${toNeeds ? `<button class="small" data-act="goto" data-slug="resolve">Answer on Resolve${needs.length ? ` (${needs.length} waiting)` : ''}</button>` : ''}
+        <button class="small ${toNeeds ? 'ghost' : ''}" data-act="session" data-slug="findings" data-body="${esc(JSON.stringify({ bot: b.id }))}" title="Open a Claude Code session that reads this run's log and the files it names">Look into this</button>
+      </div></div>`;
   }
 
   function moveCard(b, t, showFrom) {
@@ -441,7 +468,7 @@
       const row = t.closest('[data-cmp-sec]');
       if (row) { const sec = await api(`/api/brain/restructure/${encodeURIComponent(cmp.slug)}/section?i=${encodeURIComponent(row.dataset.cmpSec)}`); const meta = cmp.data.sections.find((x) => String(x.i) === row.dataset.cmpSec); cmp.sec = { i: row.dataset.cmpSec, head: meta.head, ...sec }; lastPage = ''; return paint(); }
       if (t.closest('[data-cmp-save]')) { const ta = document.querySelector('[data-cmp-comment]'); const r = await api(`/api/brain/restructure/${encodeURIComponent(cmp.slug)}/comment`, { method: 'POST', body: JSON.stringify({ head: ta.dataset.cmpComment, text: ta.value }) }); if (r.error) alert(r.error); else cmp.data.comments = r.comments; lastPage = ''; return paint(); }
-      if (t.closest('[data-cmp-restage]')) { if (!confirm('Re-stage with your comments? Opus writes the summary again (about $1.40). Nothing is applied yet.')) return; const r = await api(`/api/brain/restructure/${encodeURIComponent(cmp.slug)}/restage`, { method: 'POST', body: '{}' }); if (r.error) alert(r.error); cmp = null; $('#drawer').hidden = false; return load(); }
+      if (t.closest('[data-cmp-restage]')) { if (!confirm('Re-stage with your comments? Opus writes the summary again (about $1.40). Nothing is applied yet.')) return; const r = await api(`/api/brain/restructure/${encodeURIComponent(cmp.slug)}/restage`, { method: 'POST', body: '{}' }); if (r.error) alert(r.error); cmp = null; lastPage = ''; $('#drawer').hidden = false; store.set('brain.drawer', true); select('restructure'); return load(); }
       if (t.closest('[data-cmp-close]')) { cmp = null; lastPage = ''; return paint(); }
     }
     if (t.closest('[data-update]')) {

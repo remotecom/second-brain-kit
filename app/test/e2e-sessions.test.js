@@ -75,6 +75,22 @@ test('Repair in a session: the outcome fixes the item; Close without one leaves 
   } finally { await app.stop(); }
 });
 
+test('Look into this: a warn run opens a findings session with the next step as outcomes', { skip, timeout: 60000 }, async () => {
+  const w = world();
+  const runs = path.join(w.vault, '.bot', 'runs');
+  fs.mkdirSync(runs, { recursive: true });
+  fs.writeFileSync(path.join(runs, '2026-10-10T01-00-00-000Z-ingest.json'), JSON.stringify({ id: 'x', bot: 'ingest', status: 'warn', startedAt: '2026-10-10T01:00:00.000Z', endedAt: '2026-10-10T01:05:00.000Z', summary: '3 files → 2 wiki pages · 2 contradiction(s) need you', log: ['01:00:01 part 1/1'] }));
+  const app = await server(w);
+  try {
+    const s = (await app.api('/api/sessions', { kind: 'findings', item: { bot: 'ingest' } })).session;
+    assert.equal(s.title, 'Look into Ingest');
+    assert.deepEqual(s.outcomes.map((o) => o.label), ['Run Verify (puts them in Needs-You)', 'Run Ingest again']);
+    // The same item twice opens the one session, not a second.
+    assert.equal((await app.api('/api/sessions', { kind: 'findings', item: { bot: 'ingest' } })).session.id, s.id);
+    assert.match((await app.api('/api/sessions', { kind: 'findings', item: { bot: 'nope' } })).error, /no such bot/);
+  } finally { await app.stop(); }
+});
+
 test('after an app restart a session is asleep and opening it resumes the same id', { skip, timeout: 60000 }, async () => {
   const w = world();
   let app = await server(w);
