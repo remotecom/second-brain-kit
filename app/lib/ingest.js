@@ -493,7 +493,8 @@ async function runIngest(run, { claudeBin, vault, env, logLine, finish, latestFo
   const ledgerPath = path.join(vault, '.bot', 'state', 'ingest-held.json');
   let ledger = []; try { ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf8')); } catch {}
   const released = ledger.filter((f) => !isHeld(f) && fs.existsSync(path.join(vault, f)));
-  const explicit = (opts.files || []).filter((f) => fs.existsSync(path.join(vault, f)));
+  // Named files must be raw files inside this vault.
+  const explicit = (opts.files || []).map(String).filter((f) => !f.split('/').includes('..') && path.resolve(vault, f).startsWith(vault + path.sep) && !f.startsWith('wiki/') && fs.existsSync(path.join(vault, f)));
   let files = [...new Set([...dw.files, ...released, ...explicit])].filter((f) => !isHeld(f));
   const stillHeld = [...new Set([...ledger.filter(isHeld), ...heldFiles])];
   if (released.length) logLine(run, `released ${released.length} previously held file(s)`);

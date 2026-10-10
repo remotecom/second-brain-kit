@@ -279,6 +279,8 @@ async function runRestructure(run, ctx, body = {}) {
     return finish(run, 'ok', `applied: ${rel} is now a hub + ${rel.replace(/\.md$/, '-history.md')} (original in ${res.backup})`, res);
   }
   // 2. Stage the next page.
+  // A page named in the request must be a wiki page inside this vault.
+  if (body.page && !(/^wiki\/[^\0]+\.md$/.test(body.page) && !body.page.split('/').includes('..') && path.resolve(vault, body.page).startsWith(path.join(vault, 'wiki') + path.sep))) return finish(run, 'error', `not a wiki page: ${body.page}`);
   const target = body.page || (pickPage(vault)[0] || {}).rel;
   if (!target) return finish(run, 'ok', `no wiki page over ${MIN_BYTES / 1000}KB without a history companion`);
   if (!fs.existsSync(path.join(vault, target))) return finish(run, 'error', `no such page: ${target}`);

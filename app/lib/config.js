@@ -120,6 +120,9 @@ function getConfig(vault) {
   if (cfg.ingest.exclude == null) cfg.ingest.exclude = [];
   if (cfg.linear.deep_initiatives == null) cfg.linear.deep_initiatives = [];
   if (cfg.route.stop_words == null) cfg.route.stop_words = [];
+  // A bad zone must not break every page that formats a date: use the Mac's
+  // zone and let validate() report the bad value.
+  if (!validZone(cfg.owner.timezone)) cfg.owner.timezone = localZone();
   Object.defineProperty(cfg, '_meta', { value: { error: raw.error, missing: raw.missing } });
   return cfg;
 }
@@ -167,7 +170,8 @@ function validate(vault) {
   if (Number(raw.data.config_version || 1) < CONFIG_VERSION) add('warn', 'config_version', 'config.yaml uses the old (version 1) layout. Everything still works.');
 
   if (placeholder(c.owner.name)) add('error', 'owner.name', 'set owner.name');
-  if (!validZone(c.owner.timezone)) add('error', 'owner.timezone', `owner.timezone "${c.owner.timezone}" is not a time zone (use a name like America/New_York)`);
+  const rawZone = raw.data.owner && raw.data.owner.timezone;
+  if (rawZone && !validZone(rawZone)) add('error', 'owner.timezone', `owner.timezone "${rawZone}" is not a time zone (use a name like America/New_York)`);
   const src = c.sources;
   if (src.slack.enabled && placeholder(c.owner.slack_user_id)) add('error', 'owner.slack_user_id', 'set owner.slack_user_id (Slack profile → More → Copy member ID)');
   for (const [name, s] of Object.entries(src)) {
@@ -220,7 +224,9 @@ function findBlock(lines, keyPath) {
     if (found < 0) return null;
     header = found; indent = indentOf(lines[found]);
     let end = found + 1;
-    while (end < to && (!isContent(lines[end]) || indentOf(lines[end]) > indent)) end++;
+    // A compact list ("key:" then "- item" at the same indent) belongs to its key.
+    const compact = !/:\s*[^\s#]/.test(lines[found].replace(/#.*$/, ''));
+    while (end < to && (!isContent(lines[end]) || indentOf(lines[end]) > indent || (compact && indentOf(lines[end]) === indent && /^\s*- /.test(lines[end])))) end++;
     // Trailing blank/comment lines belong to whatever follows.
     while (end > found + 1 && !isContent(lines[end - 1])) end--;
     from = found + 1; to = end;

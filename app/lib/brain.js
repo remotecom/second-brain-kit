@@ -204,7 +204,7 @@ function heartbeat() {
   try {
     fs.mkdirSync(path.dirname(LOCK()), { recursive: true });
     const running = [...runs.values()].filter((r) => r.status === 'running').map((r) => r.bot);
-    fs.writeFileSync(LOCK(), `${JSON.stringify({ pid: process.pid, port: Number(process.env.SECOND_BRAIN_PORT || 19300), heartbeat: new Date().toISOString(), running })}\n`);
+    fs.writeFileSync(LOCK(), `${JSON.stringify({ pid: process.pid, port: require('./install').port(), heartbeat: new Date().toISOString(), running })}\n`);
   } catch {}
 }
 function releaseLock() {

@@ -42,7 +42,7 @@ function values(vault) {
   const c = getConfig(vault);
   const w = (k) => String(c.sources[k].window_days);
   return {
-    APP_PORT: String(process.env.SECOND_BRAIN_PORT || 19300),
+    APP_PORT: String(require('./install').port()),
     CLI: path.join(KIT_DIR, 'app', 'bin', 'second-brain'),
     KIT_DIR,
     KIT_SCRIPTS: path.join(KIT_DIR, 'scripts'),

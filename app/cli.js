@@ -220,8 +220,14 @@ const OWNER_HEADER = `<!-- =====================================================
   the block wins. The app never changes anything below this line.
 ====================================================================== -->`;
 
+// Running = the app holds a fresh .bot/lock (heartbeat < 15 min) that lists
+// the Morning run. A run that crashed never wrote endedAt, so schedule.json
+// alone would block update and migrate until the next good run.
 function morningRunning(vault) {
-  try { const s = JSON.parse(fs.readFileSync(path.join(vault, '.bot', 'state', 'schedule.json'), 'utf8')); return s.startedAt && (!s.endedAt || s.endedAt < s.startedAt); } catch { return false; }
+  try {
+    const l = JSON.parse(fs.readFileSync(path.join(vault, '.bot', 'lock'), 'utf8'));
+    return Date.now() - Date.parse(l.heartbeat) < 15 * 60000 && (l.running || []).includes('morning');
+  } catch { return false; }
 }
 
 function migratePlan(vault, { email }) {

@@ -42,6 +42,9 @@ function sessionSettings(stateDir) {
   // Write(path) rule is not matched by file checks (Claude Code says so).
   for (const d of RAW) deny.push(`Edit(${d}/**)`, `Bash(rm ${d}/*)`, `Bash(mv ${d}/*)`, `Bash(* > ${d}/*)`, `Bash(* >> ${d}/*)`, `Bash(sed -i* ${d}/*)`);
   for (const w of WATERMARKS) deny.push(`Edit(${w})`);
+  // Answers, the app's own state and the config are the app's to write: a
+  // session gets synced text, so it must not tick an answer or change them.
+  deny.push('Edit(Needs-You.md)', 'Edit(.bot/**)', 'Edit(config.yaml)', 'Bash(* > Needs-You.md)', 'Bash(* >> Needs-You.md)', 'Bash(sed -i* Needs-You.md)');
   const f = path.join(stateDir, 'session-settings.json');
   fs.mkdirSync(stateDir, { recursive: true });
   fs.writeFileSync(f, JSON.stringify({ $comment: 'Written by the Second Brain app for its interactive sessions: the kit denies writes to raw folders and watermark files. Your own settings still apply.', permissions: { deny } }, null, 2));
@@ -207,8 +210,9 @@ class Sessions {
     const { max } = this.limits();
     const running = [...this.map.values()].filter((x) => x.running && x !== s);
     if (running.length >= max) {
-      const idle = running.filter((x) => x.activity !== 'working' && x.activity !== 'attention').sort((a, b) => a.lastInput - b.lastInput)[0]
-        || running.sort((a, b) => a.lastInput - b.lastInput)[0];
+      const idle = running.filter((x) => x.activity !== 'working' && x.activity !== 'attention').sort((a, b) => a.lastInput - b.lastInput)[0];
+      // Never stop a session that is working or waiting on the owner.
+      if (!idle) throw new Error(`all ${max} sessions are busy; put one to sleep or close it first`);
       idle.sleep();
     }
     s.start(cols, rows);

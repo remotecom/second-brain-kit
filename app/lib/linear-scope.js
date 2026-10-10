@@ -127,7 +127,7 @@ async function walk(ctx, run, target) {
 async function runRescope(run, ctx, body = {}, walkFn = walk) {
   const { vault, logLine, finish } = ctx;
   const log = (s) => logLine(run, s);
-  const prev = readJson(scopeFile(vault));
+  let prev = readJson(scopeFile(vault));
   if (body.accept) {
     const st = readJson(stagedFile(vault));
     if (!st || st.blocked) return finish(run, 'error', 'nothing to accept: no staged scope, or it was blocked. Press Retry.');
@@ -137,6 +137,10 @@ async function runRescope(run, ctx, body = {}, walkFn = walk) {
   }
   const target = scopeTarget(vault);
   if (!target) return finish(run, 'error', 'set sources.linear.scope (an initiative ID or a team key) in config.yaml first');
+  // The 80% guard compares with the last scope of the SAME target. A new
+  // target (the owner changed the scope) is a first scope: staged, confirmed.
+  const sameTarget = prev && (target.team ? prev.team === target.team : prev.root_id === target.initiative);
+  if (!sameTarget) prev = null;
   log(`rescope ${target.team ? `team ${target.team}` : `initiative ${target.initiative}`}`);
   const r = await walkFn(ctx, run, target);
   const n = r.scope.project_count;

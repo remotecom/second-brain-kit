@@ -76,8 +76,15 @@ test('--write backs up, converts, wraps CLAUDE.md and swaps the login item', () 
 
 test('migrate refuses while a Morning run is in progress', () => {
   const { home, v } = world();
-  fs.writeFileSync(path.join(v, '.bot', 'state', 'schedule.json'), JSON.stringify({ startedAt: new Date().toISOString() }));
+  fs.writeFileSync(path.join(v, '.bot', 'lock'), JSON.stringify({ pid: 1, heartbeat: new Date().toISOString(), running: ['morning'] }));
   const r = run(home, ['migrate', '--vault', v, '--write']);
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /Morning run is in progress/);
+});
+
+test('a crashed Morning run (no endedAt, no fresh lock) does not block migrate', () => {
+  const { home, v } = world();
+  fs.writeFileSync(path.join(v, '.bot', 'state', 'schedule.json'), JSON.stringify({ startedAt: new Date().toISOString() }));
+  fs.writeFileSync(path.join(v, '.bot', 'lock'), JSON.stringify({ pid: 1, heartbeat: new Date(Date.now() - 3600e3).toISOString(), running: ['morning'] }));
+  assert.equal(run(home, ['migrate', '--vault', v]).status, 0);
 });

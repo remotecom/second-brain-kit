@@ -70,3 +70,12 @@ wiki/log.md
 .obsidian/workspace*
 scratch/
 *.tmp
+
+# The app's own state and its outputs quote private sources: session
+# transcripts, restructure copies of wiki pages, run logs, backups, caches.
+/.bot/
+/Brief.md
+/Needs-You.md
+/linear/.initiative-scope.json
+/gdrive/.parent-cache.json
+/.obsidian/graph.json

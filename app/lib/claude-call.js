@@ -57,7 +57,7 @@ function botArgs(o) {
     ...((o.format || 'stream-json') === 'stream-json' ? ['--verbose'] : []),
     '--tools', tools,
     '--allowedTools', list(o.allowed !== undefined ? o.allowed : tools),
-    '--disallowedTools', DENY,
+    '--disallowedTools', [DENY, ...(o.denyMore || [])].join(','),
     '--permission-prompts', 'none',
     '--setting-sources', o.mcp ? 'user' : '',
     '--settings', BOT_SETTINGS,
@@ -97,6 +97,8 @@ function claudeStream(claudeBin, args, { cwd, env, timeoutMs, onEvent = () => {}
 // and onEvent.
 // Every call's plan usage is recorded (lib/usage.js) for the daily cap.
 async function claudeCall(ctx, o) {
+  // Connector calls: their write tools are disallowed by name (see connectors.js).
+  if (o.mcp) o = { ...o, denyMore: require('./connectors').writeToolDeny(ctx.usageVault || ctx.vault) };
   const r = await claudeStream(ctx.claudeBin, botArgs(o), { cwd: o.cwd || ctx.vault, env: ctx.env || botEnv(), timeoutMs: o.timeoutMs, onEvent: o.onEvent });
   try { require('./usage').record(ctx.usageVault || ctx.vault, r); } catch {}
   return r;
