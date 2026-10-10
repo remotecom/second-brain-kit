@@ -79,7 +79,9 @@ function route(vault, entries) {
   const pages = buildIndex(vault);
   const byTerm = new Map(); // term -> [{ page, tier }]
   for (const p of pages) for (const [t, tier] of p.terms) { if (!byTerm.has(t)) byTerm.set(t, []); byTerm.get(t).push({ page: p, tier }); }
-  const lower = entries.map((e) => e.text.toLowerCase());
+  // Terms store dashes/underscores as spaces (termsOf), so the text must too,
+  // or a ticket like ACM-123 (term "acm 123") never matches.
+  const lower = entries.map((e) => e.text.toLowerCase().replace(/[-_]+/g, ' '));
   const hits = lower.map(() => new Set());
   const df = new Map();
   for (const [t] of byTerm) {

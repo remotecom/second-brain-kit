@@ -80,7 +80,11 @@ async function pressButtons(ctx, run, instructions, budget, tools) {
         for (const p of parts) {
           if (p.type !== 'tool_result') continue;
           const text = Array.isArray(p.content) ? p.content.map((c) => c.text || '').join('') : String(p.content || '');
-          if (searchIds.has(p.tool_use_id)) searches.push(text);
+          // ToolSearch answers with tool_reference parts, not text: keep the names.
+          if (searchIds.has(p.tool_use_id)) {
+            const refs = Array.isArray(p.content) ? p.content.filter((c) => c.type === 'tool_reference').map((c) => c.tool_name) : [];
+            searches.push(refs.length ? `tools: ${refs.join(' ')}` : text);
+          }
           if (calls.has(p.tool_use_id)) calls.get(p.tool_use_id).text = resolvePersisted(text);
         }
       }
