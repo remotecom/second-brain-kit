@@ -261,6 +261,13 @@ async function runVerify(run, ctx) {
   for (const d of drift.slice(0, 8)) log(`  ${d}`);
   if (!clean) findings.push(`memory stores: ${drift.length ? drift.length : 'bind check failed'}; run ${script('bind-project-memory.sh')} --vault ${vault} --apply`);
 
+  // 3c. Raw changed outside a sync (OV-c): a session or a person edited raw.
+  const touched = require('./sync').rawChangedOutsideSync(vault);
+  if (touched.length) {
+    log(`raw changed outside a sync: ${touched.length} file(s), e.g. ${touched.slice(0, 3).join(', ')}`);
+    findings.push(`${touched.length} raw file(s) changed outside a sync (raw is immutable; the next sync of that source rewrites in-window files)`);
+  } else log('raw: every file a sync wrote is unchanged since');
+
   // 4. Contradictions into Needs-You.md.
   const needsPath = path.join(vault, 'Needs-You.md');
   const items = parseNeedsYou(fs.existsSync(needsPath) ? fs.readFileSync(needsPath, 'utf8') : '');

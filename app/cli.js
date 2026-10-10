@@ -312,8 +312,10 @@ async function appApi(p, opt = {}) {
   try {
     res = await fetch(`http://127.0.0.1:${port}${p}`, { ...opt, headers: { 'Content-Type': 'application/json', 'X-Brain-Token': token, Origin: `http://localhost:${port}` } });
   } catch { fail(`the app is not running on port ${port}. Start it: second-brain`); }
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok && body.error) fail(body.error);
+  const text = await res.text();
+  let body = {}; try { body = JSON.parse(text); } catch {}
+  if (res.status === 401 || res.status === 403) fail(`the app refused the request (${text.trim() || res.status}). The token in ${install.STATE_DIR}/token does not match the running app: restart it (second-brain).`);
+  if (!res.ok) fail(body.error || `the app answered ${res.status}: ${text.slice(0, 200)}`);
   return body;
 }
 

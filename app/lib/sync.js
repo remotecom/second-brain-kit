@@ -119,17 +119,38 @@ const sha = (t) => require('crypto').createHash('sha256').update(t).digest('hex'
 
 // Gate passed: write the files. Content-hash skip lives here now, so an
 // unchanged file keeps its mtime and ingest won't see it as new.
+// Every raw file a sync wrote (or found identical) goes in the raw ledger
+// with its hash, so Verify can flag a raw file that changed outside a sync,
+// e.g. a chat session's Bash edit (OV-c).
+const LEDGER = (vault) => path.join(vault, '.bot', 'state', 'raw-ledger.json');
+function readLedger(vault) { try { return JSON.parse(fs.readFileSync(LEDGER(vault), 'utf8')); } catch { return {}; } }
+
 function commit(vault, files) {
   let written = 0, skipped = 0;
+  const ledger = readLedger(vault);
   for (const [rel, text] of files) {
     const abs = path.resolve(vault, rel);
     let old = null; try { old = fs.readFileSync(abs, 'utf8'); } catch {}
-    if (old !== null && sha(old) === sha(text)) { skipped++; continue; }
+    const h = sha(text);
+    ledger[rel] = h;
+    if (old !== null && sha(old) === h) { skipped++; continue; }
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, text);
     written++;
   }
+  try { fs.mkdirSync(path.dirname(LEDGER(vault)), { recursive: true }); fs.writeFileSync(LEDGER(vault), JSON.stringify(ledger)); } catch {}
   return { written, skipped };
 }
 
-module.exports = { SOURCES, specSection, rulesSection, shortInput, verify, commit, rangeFor };
+// Raw files whose content no longer matches what a sync last wrote.
+// projects/ is not here: Claude Code's auto-memory writes it by design.
+function rawChangedOutsideSync(vault) {
+  const out = [];
+  for (const [rel, h] of Object.entries(readLedger(vault))) {
+    let text; try { text = fs.readFileSync(path.join(vault, rel), 'utf8'); } catch { continue; }
+    if (sha(text) !== h) out.push(rel);
+  }
+  return out;
+}
+
+module.exports = { SOURCES, specSection, rulesSection, shortInput, verify, commit, rangeFor, rawChangedOutsideSync };

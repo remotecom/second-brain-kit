@@ -175,8 +175,9 @@ function save(vault, step, v = {}) {
 // Kit groups are remembered in .bot/state so the owner's own groups stay.
 const PALETTE = [0x4f8ef7, 0xf2a93b, 0x5cc489, 0xe0627a, 0x9b7bf2, 0x3bc0c9, 0xd98c4a, 0x8fb83c, 0xc76bc2, 0x7a8da6, 0xe8d04c, 0x58a6ff];
 function obsidianRunning() { return spawnSync('/usr/bin/pgrep', ['-x', 'Obsidian'], { encoding: 'utf8' }).status === 0; }
-function writeGraph(vault, { force = false } = {}) {
-  if (!force && obsidianRunning()) return { written: false, why: 'Close Obsidian to apply graph colors (it rewrites the file on exit).' };
+// opts.running: for tests (whether Obsidian is open); default asks pgrep.
+function writeGraph(vault, { force = false, running } = {}) {
+  if (!force && (running ?? obsidianRunning())) return { written: false, why: 'Close Obsidian to apply graph colors (it rewrites the file on exit).' };
   const dir = path.join(vault, '.obsidian');
   const file = path.join(dir, 'graph.json');
   let g = {}; try { g = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}

@@ -100,3 +100,37 @@ test('the first run: not started until marked, or when the vault has ingested be
   fs.writeFileSync(path.join(w, 'wiki', '.last-ingest'), '2026-10-01T00:00:00Z\n');
   assert.equal(S.firstRunStarted(w), true);
 });
+
+test('connector probe: 0, 1 and 2 matching connectors (3A)', async () => {
+  const v = vault();
+  const ctx = (tools, bad = '') => ({ claudeBin: path.join(__dirname, 'fake', 'claude-probe.js'), vault: v, logLine: () => {},
+    env: { ...process.env, PATH: `${path.dirname(process.execPath)}:${process.env.PATH}`, FAKE_TOOLS: tools.join(','), FAKE_BAD: bad } });
+  const T = (p, n) => `${p}__${n}`;
+  const r = await S.probeConnectors(ctx([
+    T('mcp__claude_ai_Slack', 'slack_search_public_and_private'),
+    T('mcp__claude_ai_Linear', 'list_issues'), T('mcp__claude_ai_Linear_Gateway', 'list_issues'),
+    T('mcp__claude_ai_Notion', 'notion-search'), T('mcp__claude_ai_Notion_Two', 'notion-search'),
+  ], 'mcp__claude_ai_Notion_Two'), {});
+  const x = r.result;
+  assert.equal(x.slack.chosen, 'mcp__claude_ai_Slack');            // one match: chosen
+  assert.equal(x.gcal.candidates.length, 0);                        // zero: not connected
+  assert.equal(x.gcal.chosen, null);
+  assert.equal(x.linear.candidates.length, 2);                      // two working: the current config one wins
+  assert.equal(x.linear.chosen, 'mcp__claude_ai_Linear');
+  assert.equal(x.linear.ambiguous, false);
+  assert.equal(x.notion.chosen, 'mcp__claude_ai_Notion');            // two, one fails auth: the working one
+  assert.equal(x.notion.candidates.find((c) => c.prefix === 'mcp__claude_ai_Notion_Two').status, 'auth');
+  // Two working and neither is the configured one: the owner must pick.
+  fs.writeFileSync(path.join(v, 'config.yaml'), C.setValues(fs.readFileSync(path.join(v, 'config.yaml'), 'utf8'), { 'connectors.linear': 'mcp__claude_ai_Something_Else' }));
+  const r2 = await S.probeConnectors(ctx([T('mcp__claude_ai_Linear', 'list_issues'), T('mcp__claude_ai_Linear_Gateway', 'list_issues')]), {});
+  assert.equal(r2.result.linear.ambiguous, true);
+  assert.equal(r2.result.linear.chosen, null);
+});
+
+test('graph colors wait while Obsidian runs (A5)', () => {
+  const v = vault();
+  const r = S.writeGraph(v, { running: true });
+  assert.equal(r.written, false);
+  assert.match(r.why, /Close Obsidian/);
+  assert.ok(!fs.existsSync(path.join(v, '.obsidian', 'graph.json')));
+});

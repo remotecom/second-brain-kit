@@ -335,3 +335,14 @@ test('ledger: missing file reads as []; write then read round-trips and de-dupli
   assert.deepEqual(ledger.readPending(v, 'notion'), [{ id: 'p1', tries: 2 }]);
   assert.ok(fs.existsSync(path.join(v, '.bot', 'state', 'slack-pending.json')));
 });
+
+test('raw ledger: a raw file edited outside a sync is flagged (OV-c)', () => {
+  const { commit, rawChangedOutsideSync } = require('../lib/sync');
+  const v = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-ledger-'));
+  commit(v, new Map([['slack/2026-10-01.md', 'a\n'], ['gcal/2026-10-01.md', 'b\n']]));
+  assert.deepEqual(rawChangedOutsideSync(v), []);
+  fs.appendFileSync(path.join(v, 'slack', '2026-10-01.md'), 'an edit\n');
+  assert.deepEqual(rawChangedOutsideSync(v), ['slack/2026-10-01.md']);
+  commit(v, new Map([['slack/2026-10-01.md', 'a\n']])); // the next sync rewrites it
+  assert.deepEqual(rawChangedOutsideSync(v), []);
+});
