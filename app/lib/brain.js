@@ -249,8 +249,27 @@ async function runBotAndWait(botId, claudeBin, body = {}) {
 }
 
 // The timer (lib/schedule.js). Called once by server.js after it starts listening.
+// .bot/lock (OV3): while the app runs, it holds this file with a heartbeat.
+// The kit block in CLAUDE.md tells chat sessions: a lock younger than 15
+// minutes = the app owns sync/ingest; ask it (`second-brain run`) instead.
+const LOCK = () => path.join(VAULT, '.bot', 'lock');
+function heartbeat() {
+  try {
+    fs.mkdirSync(path.dirname(LOCK()), { recursive: true });
+    const running = [...runs.values()].filter((r) => r.status === 'running').map((r) => r.bot);
+    fs.writeFileSync(LOCK(), `${JSON.stringify({ pid: process.pid, port: Number(process.env.SECOND_BRAIN_PORT || 19300), heartbeat: new Date().toISOString(), running })}\n`);
+  } catch {}
+}
+function releaseLock() {
+  try { const l = JSON.parse(fs.readFileSync(LOCK(), 'utf8')); if (l.pid === process.pid) fs.rmSync(LOCK()); } catch {}
+}
+
 function start(claudeBin) {
   CLAUDE_BIN = claudeBin;
+  heartbeat();
+  setInterval(heartbeat, 60000).unref();
+  for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { releaseLock(); process.exit(0); });
+  process.once('exit', releaseLock);
   for (const f of doctorNow(true)) if (f.level !== 'info') console.log(`doctor ${f.level}: ${f.message}${f.fix ? ` Fix: ${f.fix}` : ''}`);
   if (!claudeBin) return;
   startScheduler({
