@@ -4,6 +4,7 @@
 //   second-brain               start the app (if needed) and open its window
 //   second-brain setup         create a vault and start the app at login
 //   second-brain doctor        print what stops the bots, and the fixes
+//   second-brain migrate       move an existing vault onto this kit (--write applies)
 //
 // setup options (each is asked for when missing and a terminal is attached):
 //   --vault <dir>       the vault folder (required; there is no default)
@@ -195,15 +196,106 @@ function doctorCmd() {
   if (findings.some((f) => f.level === 'error')) process.exitCode = 1;
 }
 
+// --- migrate (an existing vault onto the kit layout, decision 6A) -------------------
+
+const OWNER_HEADER = `<!-- ======================================================================
+  THIS VAULT'S OWN NOTES (kept from the CLAUDE.md before the kit block).
+  The kit block above is the current spec. The text below is this vault's
+  earlier copy: its specifics (scope IDs, calendar names, measured incidents)
+  still hold where the block does not cover them. Where the two disagree,
+  the block wins. The app never changes anything below this line.
+====================================================================== -->`;
+
+function morningRunning(vault) {
+  try { const s = JSON.parse(fs.readFileSync(path.join(vault, '.bot', 'state', 'schedule.json'), 'utf8')); return s.startedAt && (!s.endedAt || s.endedAt < s.startedAt); } catch { return false; }
+}
+
+function migratePlan(vault, { email }) {
+  const steps = [];
+  const C = require('./lib/config');
+  const cfgFile = path.join(vault, 'config.yaml');
+  const old = fs.existsSync(cfgFile) ? fs.readFileSync(cfgFile, 'utf8') : '';
+  if (old) {
+    let r = C.convertLegacy(old);
+    let text = r.text;
+    const yaml = require('./lib/vendor/js-yaml');
+    const y = yaml.load(text);
+    // Fill what conversion cannot know: the Linear scope (from the cache)
+    // and the owner's email (from the claude.ai login). Text edits only.
+    let cache = null; try { cache = JSON.parse(fs.readFileSync(path.join(vault, 'linear', '.initiative-scope.json'), 'utf8')); } catch {}
+    const sc = (y.sources && y.sources.linear && y.sources.linear.scope) || {};
+    if (!sc.initiative && !sc.team && cache && (cache.root_id || cache.team)) {
+      text = text.replace(/^(    scope:\n      initiative: )""\n(      team: )""$/m, cache.root_id ? `$1${JSON.stringify(cache.root_id)}\n$2""` : `$1""\n$2${JSON.stringify(cache.team)}`);
+    }
+    if (email && !(y.owner && y.owner.email)) text = text.replace(/^(  email: )""$/m, `$1${JSON.stringify(email)}`);
+    if (text !== old) steps.push({ id: 'config', title: `config.yaml → version 2${r.moves && r.moves.length ? ` (${r.moves.join('; ')})` : ''}, +${r.added.length} default key(s)`, diff: require('./lib/kit-block').lineDiff(old, text), apply: () => fs.writeFileSync(cfgFile, text) });
+  }
+  const KB = require('./lib/kit-block');
+  // Render from the config as it WILL be, so the block shows the new values.
+  const kbPreview = () => { const r = KB.update(vault, { ownerHeader: OWNER_HEADER }); return r; };
+  steps.push({ id: 'claude-md', title: 'CLAUDE.md: kit block on top; the existing text kept below, unchanged', lazy: true, preview: kbPreview, apply: () => { const r = KB.update(vault, { write: true, ownerHeader: OWNER_HEADER }); if (r.status === 'edited-inside') throw new Error(`CLAUDE.md: ${r.reason}`); return r.status; } });
+  steps.push({ id: 'settings', title: `${install.SETTINGS}: vault ${vault}, kit ${KIT_DIR}`, apply: () => install.writeSettings({ vault, port: install.port(), kit: KIT_DIR }) });
+  const audits = path.join(vault, 'docs', 'audits');
+  if (fs.existsSync(audits)) {
+    steps.push({ id: 'wrappers', title: `docs/audits/*.sh: thin wrappers that run ${KIT_DIR}/scripts`, apply: () => {
+      for (const n of ['delta-walk', 'linkrot-lint', 'bind-project-memory', 'refresh-project-symlinks']) {
+        fs.writeFileSync(path.join(audits, `${n}.sh`), `#!/usr/bin/env bash\n# Thin wrapper (second-brain migrate): the real script lives in the kit,\n# so every vault runs the same copy.\nKIT="\${SECOND_BRAIN_KIT:-${KIT_DIR}}"\nexec bash "$KIT/scripts/${n}.sh" --vault "$(cd "$(dirname "$0")/../.." && pwd)" "$@"\n`, { mode: 0o755 });
+      }
+      fs.writeFileSync(path.join(audits, 'raw-classes.sh'), `#!/usr/bin/env bash\n# Thin wrapper (second-brain migrate): the class list lives in the kit.\n. "\${SECOND_BRAIN_KIT:-${KIT_DIR}}/scripts/raw-classes.sh"\n`, { mode: 0o755 });
+    } });
+  }
+  steps.push({ id: 'login-item', title: `login item: ${install.LABEL} (runs ${KIT_DIR}); removes ${install.OLD_LABELS.join(', ')}`, apply: () => {
+    const li = installLoginItem(launchAgentPlist({ vault, port: install.port(), node: nodePath(), claude: install.findClaude() }));
+    for (const l of install.OLD_LABELS) { const f = path.join(os.homedir(), 'Library', 'LaunchAgents', `${l}.plist`); if (fs.existsSync(f)) fs.rmSync(f); }
+    if (!li.loaded && !process.env.SECOND_BRAIN_NO_LAUNCHCTL) throw new Error(`login item did not start: ${li.error}`);
+  } });
+  return steps;
+}
+
+async function migrate(o) {
+  const vault = tilde(o.vault || install.resolveVault());
+  if (!vault || !fs.existsSync(path.join(vault, 'wiki'))) fail('pass --vault <dir> (an existing vault with a wiki/ folder).');
+  if (morningRunning(vault)) fail('a Morning run is in progress; run migrate after it ends.');
+  const pre = prerequisites();
+  if (pre.problems.length) { pre.problems.forEach((p) => out(`  ✗ ${p}`)); fail('fix the items above first.'); }
+  const steps = migratePlan(vault, { email: pre.auth && pre.auth.email });
+  out(`Migrate ${vault} onto the kit at ${KIT_DIR}${o.write ? '' : '   (DRY RUN: nothing changes; add --write)'}\n`);
+  for (const s of steps) {
+    out(`• ${s.title}`);
+    if (s.diff && o.diff !== 'off') out(s.diff.split('\n').slice(0, Number(o['diff-lines'] || 60)).map((l) => `    ${l}`).join('\n'));
+  }
+  if (!o.write) { out('\nRun again with --write to apply. A backup is made first.'); return; }
+
+  // Backup first: everything migrate can touch, plus the delta counts before.
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const bdir = path.join(install.STATE_DIR, 'backups', `migrate-${stamp}`);
+  fs.mkdirSync(bdir, { recursive: true });
+  const items = ['config.yaml', 'CLAUDE.md', 'docs/audits', '.bot/state', 'linear/.initiative-scope.json'].filter((p) => fs.existsSync(path.join(vault, p)));
+  const tar = spawnSync('/usr/bin/tar', ['-czf', path.join(bdir, 'vault-files.tgz'), '-C', vault, ...items], { encoding: 'utf8' });
+  if (tar.status !== 0) fail(`backup failed: ${tar.stderr}`);
+  for (const l of [install.LABEL, ...install.OLD_LABELS]) { const f = path.join(os.homedir(), 'Library', 'LaunchAgents', `${l}.plist`); if (fs.existsSync(f)) fs.copyFileSync(f, path.join(bdir, `${l}.plist`)); }
+  const dw = await require('./lib/ingest').deltaWalk(vault);
+  fs.writeFileSync(path.join(bdir, 'deltas-before.txt'), `${dw.deltasLine}\nfiles: ${dw.files.length}\n`);
+  out(`\n  ✓ backup: ${bdir}`);
+  for (const s of steps) { const r = s.apply(); out(`  ✓ ${s.id}${typeof r === 'string' ? ` (${r})` : ''}`); }
+  const findings = require('./lib/doctor').check(vault, { claudeBin: pre.claude }).filter((f) => f.level !== 'info');
+  out('\nChecks:');
+  if (!findings.length) out('  ✓ nothing stops the bots');
+  for (const f of findings) out(`  ${f.level === 'error' ? '✗' : '!'} ${f.message}`);
+  out(`\nGate: two clean Morning runs whose "Deltas walked" counts match the pattern in ${path.join(bdir, 'deltas-before.txt')}.`);
+  out(`Undo: tar -xzf ${path.join(bdir, 'vault-files.tgz')} -C ${vault}  (and restore the plist from the same folder).`);
+}
+
 async function main() {
   const o = parseArgs(process.argv.slice(2));
   const cmd = o._[0] || 'open';
   if (cmd === 'setup') return setup(o);
   if (cmd === 'doctor') return doctorCmd();
+  if (cmd === 'migrate') return migrate(o);
   if (cmd === 'help' || cmd === '--help') { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 18).map((l) => l.replace(/^\/\/ ?/, '')).join('\n')); return; }
   fail(`unknown command "${cmd}". Try: second-brain help`);
 }
 
 if (require.main === module) main().catch((e) => fail(e.message));
 
-module.exports = { parseArgs, starterConfig, createVault, launchAgentPlist, prerequisites, skeletonFiles };
+module.exports = { parseArgs, starterConfig, createVault, launchAgentPlist, prerequisites, skeletonFiles, migratePlan, OWNER_HEADER };

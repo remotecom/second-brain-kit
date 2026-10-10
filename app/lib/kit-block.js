@@ -79,12 +79,14 @@ function locate(text) {
   return { start, end, version: Number(m[1]), sha: m[2], body: text.slice(bodyStart, endAt) };
 }
 
-function apply(text, body) {
+// opts.ownerHeader: placed above an existing file's text on first insert, so a
+// reader knows that text is the owner's, below the kit block.
+function apply(text, body, opts = {}) {
   const at = locate(text || '');
   if (at && at.broken) return { status: 'edited-inside', text, diff: '', reason: 'the kit:end marker is missing' };
   if (!at) {
     // First time: the block goes on top; the owner's text stays below it, as is.
-    const rest = text ? `\n${text}` : '\n<!-- Your own notes go below this line. The app never changes them. -->\n';
+    const rest = text ? `\n${opts.ownerHeader ? `${opts.ownerHeader}\n\n` : ''}${text}` : '\n<!-- Your own notes go below this line. The app never changes them. -->\n';
     return { status: 'inserted', text: `${wrap(body)}${rest}`, diff: lineDiff('', body) };
   }
   if (sha12(at.body) !== at.sha) {
@@ -111,11 +113,11 @@ function lineDiff(a, b) {
   return out.join('\n');
 }
 
-function update(vault, { write = false } = {}) {
+function update(vault, { write = false, ownerHeader } = {}) {
   const file = path.join(vault, 'CLAUDE.md');
   let text = '';
   try { text = fs.readFileSync(file, 'utf8'); } catch {}
-  const r = apply(text, render(vault));
+  const r = apply(text, render(vault), { ownerHeader });
   if (write && (r.status === 'inserted' || r.status === 'updated')) fs.writeFileSync(file, r.text);
   return { ...r, file };
 }
