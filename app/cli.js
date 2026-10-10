@@ -142,8 +142,16 @@ function installLoginItem(plistText) {
   return { file, loaded: r.status === 0, error: r.stderr };
 }
 
-// The real path of this node (nvm, Volta, Homebrew), so login still finds it.
-const nodePath = () => { try { return fs.realpathSync(process.execPath); } catch { return process.execPath; } };
+// The node the login item starts. Prefer the stable path the launcher found
+// on PATH (/opt/homebrew/bin/node survives `brew upgrade`; the Cellar path it
+// resolves to does not). Fall back to this process's real path (nvm, Volta).
+function nodePath() {
+  const viaLauncher = process.env.SECOND_BRAIN_NODE;
+  if (viaLauncher && fs.existsSync(viaLauncher)) {
+    try { if (fs.realpathSync(viaLauncher) === fs.realpathSync(process.execPath)) return viaLauncher; } catch {}
+  }
+  try { return fs.realpathSync(process.execPath); } catch { return process.execPath; }
+}
 
 // --- commands ----------------------------------------------------------------------------
 
