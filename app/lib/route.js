@@ -24,7 +24,8 @@ const TIER = { own: 1, tag: 0.6, word: 0.35, ticket: 1 };
 function walk(dir, out = []) {
   for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, d.name);
-    if (d.isDirectory()) walk(p, out); else if (d.name.endsWith('.md')) out.push(p);
+    // README.md is kit documentation for the folder, not a wiki page.
+    if (d.isDirectory()) walk(p, out); else if (d.name.endsWith('.md') && d.name !== 'README.md') out.push(p);
   }
   return out;
 }

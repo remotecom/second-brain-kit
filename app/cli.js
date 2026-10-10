@@ -99,9 +99,12 @@ function skeletonFiles(dir = path.join(KIT_DIR, 'templates', 'vault'), rel = '')
 
 function createVault(vault, answers) {
   const made = [];
+  // The skeleton's READMEs and .gitkeep files go only into a NEW vault. An
+  // existing vault is the owner's; setup then adds only what the bots need.
+  const fresh = !fs.existsSync(path.join(vault, 'wiki'));
   fs.mkdirSync(vault, { recursive: true });
   const tmpl = path.join(KIT_DIR, 'templates', 'vault');
-  for (const rel of skeletonFiles()) {
+  for (const rel of fresh ? skeletonFiles() : []) {
     const to = path.join(vault, rel);
     if (fs.existsSync(to)) continue;
     fs.mkdirSync(path.dirname(to), { recursive: true });

@@ -54,6 +54,7 @@ found_unreachable=0
 for l in projects/*; do
   [ -e "$l" ] || [ -L "$l" ] || continue
   slug=$(basename "$l")
+  [ "$slug" = README.md ] && continue   # kit documentation for the folder
   if [ -L "$l" ]; then
     found_unreachable=1
     echo "- SYMLINK  projects/$slug -> $(readlink "$l")"

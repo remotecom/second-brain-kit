@@ -95,3 +95,26 @@ test('the server without a vault serves the not-set-up page', async () => {
     assert.match(page, /not set up yet/);
   } finally { s.kill(); }
 });
+
+test('setup on an existing vault adds no skeleton files to it', () => {
+  const home = fakeHome();
+  const vault = path.join(home, 'Old');
+  for (const d of ['wiki/partners', 'slack', 'projects/repo']) fs.mkdirSync(path.join(vault, d), { recursive: true });
+  fs.writeFileSync(path.join(vault, 'wiki', 'index.md'), '# Index\n');
+  const r = run(home, ['setup', '--vault', vault, '--yes', '--name', 'Sam', '--no-login-item']);
+  assert.equal(r.status, 0, r.stderr);
+  for (const p of ['wiki/README.md', 'projects/README.md', 'slack/README.md', 'wiki/partners/.gitkeep']) assert.ok(!fs.existsSync(path.join(vault, p)), p);
+  assert.ok(fs.existsSync(path.join(vault, 'wiki', 'log.md')), 'what the bots need is still added');
+});
+
+test('a README.md in wiki/ or projects/ is not a page or a memory store', () => {
+  const V = require('../lib/verify-bot');
+  const home = fakeHome();
+  const vault = path.join(home, 'Brain');
+  run(home, ['setup', '--vault', vault, '--yes', '--name', 'Sam', '--no-login-item']);
+  const w = V.wikiChecks(vault);
+  assert.ok(!w.bad.some((b) => /README/.test(b)), w.bad.join('\n'));
+  assert.ok(!w.unindexed.some((u) => /README/.test(u)));
+  const lint = spawnSync('/bin/bash', [path.join(__dirname, '..', '..', 'scripts', 'linkrot-lint.sh'), '--vault', vault], { encoding: 'utf8' }).stdout;
+  assert.ok(!/NOTADIR/.test(lint), lint.split('\n').filter((l) => /NOTADIR/.test(l)).join('\n'));
+});
