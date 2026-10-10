@@ -24,6 +24,7 @@
   let vaultName = 'obsidian';
   let bots = [];
   let setup = [];
+  let kitUpdate = null;
   let sessions = [];
   let cmp = null; // restructure compare: { slug, data, sec: { i, before, after, ... } }
   let chatModel = store.get('brain.chatModel', 'sonnet');
@@ -86,6 +87,7 @@
     try { sessions = (await api('/api/sessions')).sessions || []; } catch {}
     sched = r.schedule || {};
     setup = r.setup || [];
+    kitUpdate = r.update || null;
     try { const f = await api('/api/brain/file?path=Brief.md'); briefText = f.text || ''; } catch {}
     try { needs = (await api('/api/brain/needs')).items || []; } catch {}
     const known = new Set(GROUPS.flatMap((g) => g.bots));
@@ -169,6 +171,14 @@
       ${errs.length ? '<button class="small ghost" data-act="session" data-slug="repair" data-body="{}">Repair in a session</button>' : ''}</div></div>`;
   }
 
+  function updateCard() {
+    const u = kitUpdate;
+    if (!u || !u.behind) return '';
+    return `<div class="card"><div class="k" style="color:var(--accent)">Kit update · ${u.behind} new commit(s)</div>
+      <div class="n">${(u.log || []).slice(0, 6).map((l) => esc(l)).join('<br>')}</div>
+      <div class="row"><button class="small" data-update>Update</button><span class="muted">Adds new config keys (never changes yours) and refreshes the kit block in CLAUDE.md. The app restarts.</span></div></div>`;
+  }
+
   function todayPage() {
     const list = todos();
     const m = byId('morning');
@@ -177,7 +187,7 @@
     const moves = list.length ? list.map(({ bot, todo }) => moveCard(bot, todo, true)).join('') : (setup.some((f) => f.level === 'error') ? '' : '<div class="empty">Nothing is waiting on you.</div>');
     const brief = briefText ? `<div class="card brief"><div class="k" style="color:var(--muted)">Today's brief</div><div class="doc">${render(briefText.replace(/^---[\s\S]*?---\n/, ''))}</div>
       <div class="row"><a href="${obsidian('Brief.md')}"><button class="ghost small">Open in Obsidian</button></a></div></div>` : '';
-    return head + setupCard() + moves + brief;
+    return head + setupCard() + updateCard() + moves + brief;
   }
 
   function groupPage(g) {
@@ -431,6 +441,13 @@
       if (t.closest('[data-cmp-save]')) { const ta = document.querySelector('[data-cmp-comment]'); const r = await api(`/api/brain/restructure/${encodeURIComponent(cmp.slug)}/comment`, { method: 'POST', body: JSON.stringify({ head: ta.dataset.cmpComment, text: ta.value }) }); if (r.error) alert(r.error); else cmp.data.comments = r.comments; lastPage = ''; return paint(); }
       if (t.closest('[data-cmp-restage]')) { if (!confirm('Re-stage with your comments? Opus writes the summary again (about $1.40). Nothing is applied yet.')) return; const r = await api(`/api/brain/restructure/${encodeURIComponent(cmp.slug)}/restage`, { method: 'POST', body: '{}' }); if (r.error) alert(r.error); cmp = null; $('#drawer').hidden = false; return load(); }
       if (t.closest('[data-cmp-close]')) { cmp = null; lastPage = ''; return paint(); }
+    }
+    if (t.closest('[data-update]')) {
+      if (!confirm('Update the kit now? The app restarts when it is done.')) return;
+      const r = await api('/api/update', { method: 'POST', body: '{}' });
+      if (r.error) return alert(r.error);
+      alert('Updating. The app restarts in a moment; this page reloads.');
+      return setTimeout(() => location.reload(), 8000);
     }
     const so = t.closest('[data-session]');
     if (so) return window.SessionPanel.openId(so.dataset.session);

@@ -7,6 +7,7 @@
 //   second-brain migrate       move an existing vault onto this kit (--write applies)
 //   second-brain status        what runs, what waits on you (--json)
 //   second-brain run <bot>     start a bot in the app (--wait for the result)
+//   second-brain update        pull the kit, add new config keys, re-render the kit block
 //
 // setup options (each is asked for when missing and a terminal is attached):
 //   --vault <dir>       the vault folder (required; there is no default)
@@ -36,7 +37,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) { o._.push(a); continue; }
     const [k, v] = a.slice(2).split('=');
-    if (['yes', 'no-login-item', 'write', 'wait', 'json'].includes(k)) o[k] = true;
+    if (['yes', 'no-login-item', 'write', 'wait', 'json', 'post'].includes(k)) o[k] = true;
     else o[k] = v !== undefined ? v : argv[++i];
   }
   return o;
@@ -349,6 +350,66 @@ async function runCmd(o) {
   }
 }
 
+// --- update (5A): pull the kit, then migrate config + re-render the kit block -------
+const git = (...a) => spawnSync('/usr/bin/git', ['-C', KIT_DIR, ...a], { encoding: 'utf8' });
+
+function kitBehind({ fetch = true } = {}) {
+  if (git('rev-parse', '--git-dir').status !== 0) return { error: `${KIT_DIR} is not a git checkout; reinstall from the repo` };
+  if (fetch) { const f = git('fetch', '--quiet'); if (f.status !== 0) return { error: `git fetch failed: ${(f.stderr || '').trim().split('\n')[0]}` }; }
+  const up = git('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}');
+  if (up.status !== 0) return { error: 'this checkout tracks no upstream branch' };
+  const n = Number(git('rev-list', '--count', 'HEAD..@{u}').stdout.trim() || 0);
+  const log = n ? git('log', '--oneline', '--no-decorate', 'HEAD..@{u}').stdout.trim().split('\n') : [];
+  return { behind: n, upstream: up.stdout.trim(), log };
+}
+
+// After the pull, in the NEW code: config gets new keys (never a changed
+// value), the kit block is re-rendered (an edit inside it stops that part).
+function postUpdate(vault, write) {
+  const C = require('./lib/config');
+  const KB = require('./lib/kit-block');
+  const steps = [];
+  const cfgFile = path.join(vault, 'config.yaml');
+  if (fs.existsSync(cfgFile)) {
+    const old = fs.readFileSync(cfgFile, 'utf8');
+    const res = (Number((require('./lib/vendor/js-yaml').load(old) || {}).config_version || 1) < C.CONFIG_VERSION ? C.convertLegacy : C.migrateConfig)(old);
+    if (res.text !== old) { steps.push(`config.yaml: +${res.added.length} key(s)${res.added.length ? ` (${res.added.slice(0, 6).join(', ')}${res.added.length > 6 ? ', …' : ''})` : ''}`); if (write) fs.writeFileSync(cfgFile, res.text); }
+  }
+  const kb = KB.update(vault, { write });
+  if (kb.status === 'edited-inside') steps.push(`CLAUDE.md: NOT updated: ${kb.reason}`);
+  else if (kb.status !== 'unchanged') steps.push(`CLAUDE.md: kit block ${kb.status} (${kb.diff.split('\n').filter(Boolean).length} line(s) differ)`);
+  return { steps, kitBlock: kb.status };
+}
+
+async function update(o) {
+  const vault = install.resolveVault();
+  if (!vault) fail('not set up: run `second-brain setup`.');
+  if (o.post) { const r = postUpdate(vault, !!o.write); r.steps.forEach((x) => out(`  • ${x}`)); if (!r.steps.length) out('  • config.yaml and the kit block are current'); return; }
+  if (morningRunning(vault)) fail('a Morning run is in progress; update after it ends.');
+  const dirty = git('status', '--porcelain', '--untracked-files=no').stdout.trim();
+  if (dirty) fail(`the kit checkout ${KIT_DIR} has local edits; update refuses to touch it:\n${dirty}`);
+  const b = kitBehind();
+  if (b.error) fail(b.error);
+  out(b.behind ? `${b.behind} new commit(s) on ${b.upstream}:\n${b.log.map((l) => `  ${l}`).join('\n')}` : `The kit is up to date (${b.upstream}).`);
+  if (!o.yes && process.stdin.isTTY && b.behind) {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const a = await ask(rl, 'Update now? (y/N)', 'n'); rl.close();
+    if (!/^y/i.test(a)) { out('Nothing changed.'); return; }
+  }
+  if (b.behind) {
+    const p = git('merge', '--ff-only', '--quiet', '@{u}');
+    if (p.status !== 0) fail(`the update could not fast-forward; nothing changed: ${(p.stderr || '').trim()}`);
+    out(`  ✓ kit updated to ${git('rev-parse', '--short', 'HEAD').stdout.trim()}`);
+  }
+  // The new code does the vault part.
+  const post = spawnSync(process.execPath, [path.join(KIT_DIR, 'app', 'cli.js'), 'update', '--post', '--write'], { encoding: 'utf8', env: process.env });
+  process.stdout.write(post.stdout); process.stderr.write(post.stderr);
+  if (!process.env.SECOND_BRAIN_NO_LAUNCHCTL && b.behind) {
+    spawnSync('/bin/launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${install.LABEL}`], { stdio: 'ignore' });
+    out('  ✓ the app restarted on the new code');
+  }
+}
+
 async function main() {
   const o = parseArgs(process.argv.slice(2));
   const cmd = o._[0] || 'open';
@@ -356,11 +417,12 @@ async function main() {
   if (cmd === 'doctor') return doctorCmd();
   if (cmd === 'migrate') return migrate(o);
   if (cmd === 'status') return statusCmd(o);
+  if (cmd === 'update') return update(o);
   if (cmd === 'run') return runCmd(o);
-  if (cmd === 'help' || cmd === '--help') { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 20).map((l) => l.replace(/^\/\/ ?/, '')).join('\n')); return; }
+  if (cmd === 'help' || cmd === '--help') { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 21).map((l) => l.replace(/^\/\/ ?/, '')).join('\n')); return; }
   fail(`unknown command "${cmd}". Try: second-brain help`);
 }
 
 if (require.main === module) main().catch((e) => fail(e.message));
 
-module.exports = { parseArgs, starterConfig, createVault, launchAgentPlist, prerequisites, skeletonFiles, migratePlan, OWNER_HEADER };
+module.exports = { kitBehind, postUpdate, parseArgs, starterConfig, createVault, launchAgentPlist, prerequisites, skeletonFiles, migratePlan, OWNER_HEADER };

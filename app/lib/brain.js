@@ -205,8 +205,16 @@ function releaseLock() {
   try { const l = JSON.parse(fs.readFileSync(LOCK(), 'utf8')); if (l.pid === process.pid) fs.rmSync(LOCK()); } catch {}
 }
 
+// Kit updates (5A): check a few times a day; Today shows "N commits behind".
+let kitUpdate = null;
+function checkUpdate() {
+  try { const r = require('../cli').kitBehind(); kitUpdate = { ...r, checkedAt: new Date().toISOString() }; } catch (e) { kitUpdate = { error: e.message }; }
+}
+
 function start(claudeBin) {
   CLAUDE_BIN = claudeBin;
+  setTimeout(checkUpdate, 60000).unref();
+  setInterval(checkUpdate, 6 * 3600e3).unref();
   heartbeat();
   setInterval(heartbeat, 60000).unref();
   if (claudeBin) SESSIONS = new Sessions({ vault: VAULT, stateDir: STATE_DIR, claudeBin });
@@ -559,7 +567,7 @@ function botsView() {
 
 async function handle(req, res, url, { json, readBody, claudeBin }) {
   const p = url.pathname;
-  if (!p.startsWith('/api/brain/') && !p.startsWith('/api/setup') && !p.startsWith('/api/sessions')) return false;
+  if (!p.startsWith('/api/brain/') && !p.startsWith('/api/setup') && !p.startsWith('/api/sessions') && p !== '/api/update') return false;
 
 
   // --- Sessions (T19): real Claude Code in a pty, streamed over /ws.
@@ -649,6 +657,16 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     return json(res, 200, { runId: run.id, view: setup.view(VAULT) }), true;
   }
 
+  // Update the kit: runs `second-brain update --yes` on its own; it restarts
+  // the app when it is done, so the page just reloads.
+  if (p === '/api/update' && req.method === 'POST') {
+    if ([...runs.values()].some((r) => r.status === 'running')) return json(res, 409, { error: 'a bot is running; update after it ends' }), true;
+    const { spawn: sp } = require('child_process');
+    const c = sp(process.execPath, [path.join(__dirname, '..', 'cli.js'), 'update', '--yes'], { detached: true, stdio: ['ignore', fs.openSync(path.join(STATE_DIR, 'update.log'), 'a'), fs.openSync(path.join(STATE_DIR, 'update.log'), 'a')] });
+    c.unref();
+    return json(res, 200, { started: true, log: path.join(STATE_DIR, 'update.log') }), true;
+  }
+
   // Repair creates only what is missing (folders, starter wiki files); it
   // never overwrites. The session-based Repair (Phase 2) builds on this.
   if (p === '/api/brain/doctor/repair' && req.method === 'POST') {
@@ -661,7 +679,7 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
   if (p === '/api/brain/bots' && req.method === 'GET') {
     CLAUDE_BIN = CLAUDE_BIN || claudeBin;
     const setup = doctorNow().filter((f) => f.level !== 'info');
-    json(res, 200, { vault: VAULT, bots: botsView(), setup, schedule: { ...scheduleSettings(VAULT), next: nextRun(VAULT) } });
+    json(res, 200, { vault: VAULT, bots: botsView(), setup, update: kitUpdate, schedule: { ...scheduleSettings(VAULT), next: nextRun(VAULT) } });
     return true;
   }
 
