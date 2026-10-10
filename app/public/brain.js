@@ -24,6 +24,9 @@
   let vaultName = 'obsidian';
   let bots = [];
   let setup = [];
+  let sessions = [];
+  let chatModel = store.get('brain.chatModel', 'sonnet');
+  let transcript = null; // { id, lines } on the Sessions page
   let sched = {};
   let sel = store.get('brain.sel', 'today');
   let open = store.get('brain.open', { 'g-daily': true, 'g-syncs': false, 'g-wiki': true, 'g-checks': false });
@@ -71,12 +74,15 @@
   }
   const todos = () => bots.filter((b) => b.todo).map((b) => ({ bot: b, todo: b.todo }));
 
+  window.SessionPanel.init({ api, esc: (x) => esc(x), onChange: (showLog) => { if (showLog) { $('#drawer').hidden = false; store.set('brain.drawer', true); } load(); } });
+
   // --- data ---
   async function load() {
     let r;
     try { r = await api('/api/brain/bots'); } catch { schedulePoll(15000); return; }
     vaultName = (r.vault || '').split('/').pop() || vaultName;
     bots = r.bots || [];
+    try { sessions = (await api('/api/sessions')).sessions || []; } catch {}
     sched = r.schedule || {};
     setup = r.setup || [];
     try { const f = await api('/api/brain/file?path=Brief.md'); briefText = f.text || ''; } catch {}
@@ -116,6 +122,11 @@
         }
       }
     }
+    // Sessions: the open and asleep ones, newest first; done ones on the page.
+    const live = sessions.filter((s) => s.state !== 'done');
+    html += `<div class="nav-item group ${sel === 'chat' ? 'sel' : ''}" data-sel="chat"><span class="lbl">Vault chat</span></div>`;
+    html += `<div class="nav-item group ${sel === 'sessions' ? 'sel' : ''}" data-sel="sessions"><span class="lbl">Sessions</span>${live.length ? `<span class="badge">${live.length}</span>` : ''}</div>`;
+    for (const s of live.slice(0, 8)) html += `<div class="nav-item child" data-session="${esc(s.id)}"><span class="dot ${s.running ? 'running' : 'never'}"></span><span class="lbl">${esc(s.title)}</span></div>`;
     const needsSetup = setup.some((f) => f.level === 'error');
     html += `<div class="nav-foot">
       <div class="nav-item ${sel === 'setup' ? 'sel' : ''}" data-sel="setup"><span class="lbl">Setup</span>${needsSetup ? '<span class="badge">!</span>' : ''}</div>
@@ -135,7 +146,7 @@
     if (lastPage === '__setup__') window.SetupPage.unmount($('#page'));
     const g = GROUPS.find((x) => x.id === sel);
     const b = byId(sel);
-    const html = sel === 'today' ? todayPage() : g ? groupPage(g) : b ? botPage(b) : '<div class="empty">Pick something on the left.</div>';
+    const html = sel === 'today' ? todayPage() : sel === 'sessions' ? sessionsPage() : sel === 'chat' ? chatPage() : g ? groupPage(g) : b ? botPage(b) : '<div class="empty">Pick something on the left.</div>';
     if (html === lastPage) return;
     const doc = document.querySelector('#page .doc');
     const keep = doc ? doc.scrollTop : 0;
@@ -153,7 +164,8 @@
     const fixable = errs.some((f) => f.repair);
     return `<div class="card ${errs.length ? 'move' : ''}"><div class="k">${errs.length ? `Setup issues · ${errs.length} stop a bot` : 'Setup notes'}</div>
       ${errs.map(line).join('')}${warns.length ? `<details${errs.length ? '' : ' open'}><summary class="n">${warns.length} note(s) that do not stop anything</summary>${warns.map(line).join('')}</details>` : ''}
-      ${fixable ? '<div class="row"><button class="small" data-act="repair" data-confirm="Create the missing folders and starter files? Nothing that exists is changed.">Repair</button></div>' : ''}</div>`;
+      <div class="row">${fixable ? '<button class="small" data-act="repair" data-confirm="Create the missing folders and starter files? Nothing that exists is changed.">Repair</button>' : ''}
+      ${errs.length ? '<button class="small ghost" data-act="session" data-slug="repair" data-body="{}">Repair in a session</button>' : ''}</div></div>`;
   }
 
   function todayPage() {
@@ -185,6 +197,30 @@
     if (b.kind === 'later') return '<span class="muted">not built</span>';
     const running = status(b) === 'running';
     return `<button class="ghost small" data-run="${b.id}" ${running ? 'disabled' : ''}>${running ? 'Running…' : 'Run'}</button>`;
+  }
+
+  // Every session, open and done. Done ones keep their transcript 30 days.
+  function sessionsPage() {
+    const row = (s) => `<tr><td><span class="dot ${s.running ? 'running' : s.state === 'done' ? 'ok' : 'never'}" style="display:inline-block;margin-right:8px"></span>${esc(s.title)}</td>
+      <td class="muted">${esc(s.kind)} · ${esc(s.model)}</td><td>${esc(s.state)}${s.outcome ? ` · ${esc(s.outcome)}` : ''}</td><td class="muted">${ago(s.endedAt ? new Date(s.endedAt).toISOString() : new Date(s.lastInput).toISOString())}</td>
+      <td>${s.state === 'done' ? `<button class="ghost small" data-transcript="${esc(s.id)}">Transcript</button>` : `<button class="small" data-session="${esc(s.id)}">Open</button>`}</td></tr>`;
+    const open = sessions.filter((s) => s.state !== 'done'), done = sessions.filter((s) => s.state === 'done');
+    const tr = transcript ? `<div class="card"><div class="k" style="color:var(--muted)">Transcript</div><div class="doc">${transcript.lines.map((l) => `<p><b>${l.who === 'user' ? 'You' : 'Claude'}:</b> ${esc(l.text).replace(/\n/g, '<br>')}</p>`).join('') || '<p class="muted">Empty.</p>'}</div></div>` : '';
+    return `<h1>Sessions</h1><div class="sub">Real Claude Code sessions the app opened next to an item. At most ${esc(String(4))} run at once; one with no input for 30 minutes goes to sleep and continues where it stopped when you open it.</div>
+      <table class="t"><thead><tr><th>Open</th><th></th><th></th><th></th><th></th></tr></thead><tbody>${open.map(row).join('') || '<tr><td class="muted" colspan="5">None.</td></tr>'}</tbody></table>
+      <table class="t"><thead><tr><th>Done</th><th></th><th></th><th></th><th></th></tr></thead><tbody>${done.map(row).join('') || '<tr><td class="muted" colspan="5">None yet.</td></tr>'}</tbody></table>${tr}`;
+  }
+
+  // Vault chat (T21): a real Claude Code session in the vault.
+  function chatPage() {
+    const chats = sessions.filter((s) => s.kind === 'chat');
+    return `<h1>Vault chat</h1><div class="sub">Ask your vault anything, in a real Claude Code session that reads the vault's CLAUDE.md. Syncs, ingest and the other app jobs go through the app: ask Claude to run them and it uses <code>second-brain run</code>.</div>
+      <div class="card"><div class="row">
+        <label class="opt"><input type="radio" name="cm" value="opus" ${chatModel === 'opus' ? 'checked' : ''} data-cm> Opus <span class="muted">(research, hard questions)</span></label>
+        <label class="opt"><input type="radio" name="cm" value="sonnet" ${chatModel === 'sonnet' ? 'checked' : ''} data-cm> Sonnet <span class="muted">(daily work)</span></label>
+        <label class="opt"><input type="radio" name="cm" value="haiku" ${chatModel === 'haiku' ? 'checked' : ''} data-cm> Haiku <span class="muted">(quick facts)</span></label>
+      </div><div class="row"><button data-chat>New chat</button></div></div>
+      ${chats.length ? `<table class="t"><tbody>${chats.map((s) => `<tr><td>${esc(s.title)}</td><td class="muted">${esc(s.model)} · ${esc(s.state)}</td><td>${s.state === 'done' ? `<button class="ghost small" data-transcript="${esc(s.id)}">Transcript</button>` : `<button class="small" data-session="${esc(s.id)}">Open</button>`}</td></tr>`).join('')}</tbody></table>` : ''}`;
   }
 
   function botPage(b) {
@@ -309,6 +345,10 @@
     if (a && a.dataset.act === 'goto') return select(a.dataset.slug);
     // Only https links to claude.ai open from a card (the connector settings).
     if (a && a.dataset.act === 'open-url') { if (/^https:\/\/claude\.ai\//.test(a.dataset.url)) window.open(a.dataset.url, '_blank', 'noopener'); return; }
+    if (a && a.dataset.act === 'session') {
+      let item = {}; try { item = JSON.parse(a.dataset.body || '{}'); } catch {}
+      return window.SessionPanel.start(a.dataset.slug, item);
+    }
     if (a && a.dataset.act === 'repair') {
       if (a.dataset.confirm && !confirm(a.dataset.confirm)) return;
       a.disabled = true;
@@ -335,6 +375,12 @@
       }
       return load();
     }
+    const so = t.closest('[data-session]');
+    if (so) return window.SessionPanel.openId(so.dataset.session);
+    const tx = t.closest('[data-transcript]');
+    if (tx) { const r = await api(`/api/sessions/${tx.dataset.transcript}/transcript`); transcript = r.error ? { lines: [{ who: 'assistant', text: r.error }] } : { id: tx.dataset.transcript, lines: r.lines }; lastPage = ''; return paint(); }
+    if (t.matches && t.matches('[data-cm]')) { chatModel = t.value; store.set('brain.chatModel', chatModel); return; }
+    if (t.closest('[data-chat]')) { const m = chatModel; return window.SessionPanel.start('chat', { title: `Chat ${new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` }, m); }
     const s = t.closest('[data-sel]');
     if (s) { ev.preventDefault(); return select(s.dataset.sel); }
   });

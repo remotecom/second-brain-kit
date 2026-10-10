@@ -76,76 +76,15 @@ const BUTTON_SYNCS = { slack: syncSlackMcp, linear: syncLinearMcp, notion: syncN
 // No default vault: `second-brain setup` records it (lib/install.js).
 const VAULT = resolveVault();
 const STATE_DIR = INSTALL_STATE_DIR;
+// A neutral folder for calls that need no vault (the health probe).
 const CHAT_CWD = path.join(STATE_DIR, 'brain-cwd');
 const RUNS_DIR = path.join(VAULT, '.bot', 'runs');
-
-const CHAT_MODELS = new Set(['haiku', 'sonnet']);
-const CHAT_BUDGET_USD = '0.50';
-const CHAT_TIMEOUT_MS = 180000;
-
-// Grep-first, not index-first. Measured 2026-10-01 on "what's open with <partner>":
-// reading wiki/index.md (75KB) first cost $0.14 / 27s on haiku; grepping first
-// cost $0.05 / 14s with an equally grounded answer.
-const CHAT_PROMPT = `You are the owner's second brain: a personal wiki at ${VAULT}.
-Answer questions from it, and ONLY from it. How to navigate:
-1. ALWAYS start by using Grep on ${VAULT}/wiki for the key names and terms in the question. Never answer before searching.
-2. Read only the 1-3 most relevant pages that Grep found. Read ${VAULT}/wiki/index.md only if Grep finds nothing useful.
-3. Open raw sources (slack/, linear/, notion/, gcal/, gdrive/, projects/) only when the wiki lacks the detail asked for.
-4. Cite every page you used as a wikilink, e.g. [[wiki/partners/acme]] or [[slack/2026-09-21]].
-Rules: be brief and concrete; lead with the answer; say plainly when the vault doesn't know. You are read-only. You only see the vault, never a live system, so mention dates when freshness matters.`;
 
 fs.mkdirSync(CHAT_CWD, { recursive: true });
 
 // A stale ANTHROPIC_API_KEY beats the claude.ai login and 401s; botEnv strips it.
 const claudeEnv = () => botEnv();
 
-// Run `claude -p` and resolve with its parsed --output-format json result.
-// stdin is closed on purpose: an open stdin makes -p print a "no stdin data"
-// warning into stdout, which breaks the JSON parse (measured 2026-10-01).
-function claudeJSON(claudeBin, args, { cwd, timeoutMs, onLine } = {}) {
-  return new Promise((resolve) => {
-    const started = Date.now();
-    const child = spawn(claudeBin, args, { cwd, env: claudeEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '', err = '';
-    child.stdout.on('data', (c) => { out += c; });
-    child.stderr.on('data', (c) => {
-      err += c;
-      if (onLine) String(c).split('\n').filter(Boolean).forEach(onLine);
-    });
-    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs || CHAT_TIMEOUT_MS);
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      const ms = Date.now() - started;
-      const line = out.split('\n').find((l) => l.startsWith('{')) || '';
-      let parsed = null;
-      try { parsed = JSON.parse(line); } catch {}
-      resolve({ code, ms, parsed, stderr: err.slice(-2000), raw: out.slice(0, 2000) });
-    });
-  });
-}
-
-// --- chat ------------------------------------------------------------------
-
-async function chat(claudeBin, { message, sessionId, model }) {
-  const m = CHAT_MODELS.has(model) ? model : 'haiku';
-  const args = botArgs({
-    prompt: String(message).slice(0, 8000), model: m, format: 'json', persist: true,
-    resume: sessionId && /^[0-9a-f-]{36}$/.test(sessionId) ? sessionId : undefined,
-    budget: CHAT_BUDGET_USD, extra: ['--add-dir', VAULT, '--append-system-prompt', CHAT_PROMPT],
-  });
-  const r = await claudeJSON(claudeBin, args, { cwd: CHAT_CWD });
-  const p = r.parsed;
-  if (!p) return { error: `claude returned no result (exit ${r.code}). ${r.stderr || r.raw}`.trim(), ms: r.ms };
-  if (p.is_error) {
-    const why = p.subtype === 'error_max_budget_usd'
-      ? `This turn hit the $${CHAT_BUDGET_USD} cap. Try a narrower question, or start a new chat.`
-      : (p.result || p.subtype || 'error');
-    return { error: why, sessionId: p.session_id, costUsd: p.total_cost_usd, model: m, ms: r.ms };
-  }
-  // num_turns 1 means the model answered without calling a single tool, i.e.
-  // without reading the vault. Surfaced in the UI rather than trusted silently.
-  return { text: p.result || '', sessionId: p.session_id, costUsd: p.total_cost_usd || 0, model: m, ms: r.ms, unread: (p.num_turns || 0) <= 1 };
-}
 
 // --- bots ------------------------------------------------------------------
 // One entry per bot. `kind` says what it costs to run:
@@ -481,6 +420,7 @@ function todoFor(id) {
       items: [{ title: bot ? bot.name : id, actions: [
         { label: 'Open claude.ai connectors', kind: 'open-url', url: d.fix },
         { label: 'Run again', kind: 'run', slug: id },
+        { label: 'Fix in a session', kind: 'session', slug: 'connector', body: { bot: id } },
       ] }],
     };
   }
@@ -510,6 +450,66 @@ function tickRestructure(slug) {
   const rep = fs.readFileSync(f, 'utf8');
   if (!/^- \[ \] apply this restructure/m.test(rep) && !/^- \[x\] apply this restructure/im.test(rep)) throw new Error('report.md has no apply box');
   fs.writeFileSync(f, rep.replace(/^- \[ \] apply this restructure/m, '- [x] apply this restructure'));
+}
+
+// --- Session kinds (A2). The SERVER decides each kind's first message and
+// its outcome buttons from the item; the browser only says which kind and
+// which item. An outcome button is an app action: the app writes the result
+// (a tick, a repair, a run), then closes the session. The model explains and
+// suggests; it never writes the outcome.
+const SUGGEST_RULE = (labels) => labels.length ? `When you recommend one of the app's buttons, end your reply with one line: SUGGEST: <label>, where <label> is exactly one of: ${labels.map((l) => `"${l}"`).join(', ')}. The owner presses the button; you never do the action yourself.` : '';
+const SESSION_BASE = 'You are in a Second Brain app session in the owner\'s vault. Read the vault CLAUDE.md first. Explain in short, plain sentences. Never edit a raw folder or a watermark file. Never tick a box in Needs-You.md.';
+
+function sessionSpec(kind, item = {}) {
+  if (kind === 'repair') {
+    const f = doctorNow(true).filter((x) => x.level !== 'info');
+    const outcomes = [{ label: 'Run Repair', action: { type: 'repair' } }, { label: 'Check again', action: { type: 'doctor' } }];
+    return { title: 'Repair setup', outcomes, prompt: [SESSION_BASE, 'Goal: help the owner fix what stops the bots. The app\'s checks found:',
+      ...(f.length ? f.map((x) => `- [${x.level}] ${x.message} Fix: ${x.fix}`) : ['- nothing']),
+      'For each finding, say what it means and the exact fix. "Run Repair" creates missing folders and starter files only (it never overwrites). Config values are fixed on the Setup page or in config.yaml.', SUGGEST_RULE(outcomes.map((o) => o.label))].join('\n') };
+  }
+  if (kind === 'connector') {
+    const bot = BOTS.find((b) => b.id === item.bot);
+    if (!bot) throw new Error('no such bot');
+    const last = latestFor(bot.id) || {};
+    const outcomes = [{ label: 'Run again', action: { type: 'run', bot: bot.id } }];
+    return { title: `Fix ${bot.name}`, outcomes, prompt: [SESSION_BASE, `Goal: help the owner get ${bot.name} working. Its last run ended: ${last.status || 'never ran'}: ${last.summary || ''}`,
+      'Explain the likely cause and the fix. A connector that is not connected is fixed in claude.ai → Settings → Connectors (https://claude.ai/settings/connectors). You may test a connector tool once to check.', SUGGEST_RULE(outcomes.map((o) => o.label))].join('\n') };
+  }
+  if (kind === 'needs') {
+    const it = needsOpenItems().find((x) => x.id === item.id);
+    if (!it) throw new Error('no such open Needs-You item');
+    const outcomes = it.boxes.map((b) => ({ label: b.label, action: { type: 'tick', id: it.id, label: b.label } }));
+    return { title: `Look into ${it.id}`, outcomes, item: { id: it.id }, prompt: [SESSION_BASE, `Goal: help the owner answer this Needs-You item (${it.id}):`, it.text,
+      `The answer choices are: ${it.boxes.map((b) => `"${b.label}"`).join(', ')}.`,
+      'Read the wiki pages and raw files the item names, show the evidence with file links, and say which choice the sources support and why.', SUGGEST_RULE(outcomes.map((o) => o.label))].join('\n') };
+  }
+  if (kind === 'restructure') {
+    const st = stagedRestructures().find((x) => x.slug === item.slug);
+    if (!st) throw new Error('no such staged restructure');
+    const outcomes = [{ label: st.stale ? 'Re-stage' : 'Apply', action: { type: 'restructure', slug: st.slug } }];
+    return { title: `Ask about ${st.title}`, outcomes, item: { slug: st.slug }, prompt: [SESSION_BASE, `Goal: help the owner review a staged restructure of ${st.title}. The staged files are in ${path.join(RESTRUCTURE_DIR, st.slug)}: report.md (what moves and why), hub.md (the new page), history.md (the verbatim history).`,
+      'Answer the owner\'s questions about the change. Check that nothing was lost, using report.md.', SUGGEST_RULE(outcomes.map((o) => o.label))].join('\n') };
+  }
+  if (kind === 'chat') return { title: item.title || 'Vault chat', outcomes: [], prompt: '' };
+  throw new Error(`unknown session kind ${kind}`);
+}
+
+// Do one outcome's app action. Returns a short summary for the session.
+async function runOutcome(action, claudeBin) {
+  if (action.type === 'repair') { const made = doctor.repair(VAULT); doctorNow(true); return made.length ? `created ${made.join(', ')}` : 'nothing was missing'; }
+  if (action.type === 'doctor') { const e = doctorNow(true).filter((x) => x.level === 'error'); return e.length ? `${e.length} issue(s) left` : 'nothing stops the bots'; }
+  if (action.type === 'tick') { answerNeed(action.id, action.label); return `ticked "${action.label}" on ${action.id}; Resolve applies it`; }
+  if (action.type === 'run' || action.type === 'restructure') {
+    const id = action.type === 'run' ? action.bot : 'restructure';
+    if (isRunning(id)) throw new Error(`${id} is already running`);
+    if (action.type === 'restructure') tickRestructure(action.slug);
+    const bot = BOTS.find((b) => b.id === id);
+    const run = newRun(bot);
+    if (gated(run, id)) Promise.resolve(bot.run(run, claudeBin, {})).catch((e) => failRun(run, e));
+    return `started ${bot.name}`;
+  }
+  throw new Error('unknown outcome');
 }
 
 // --- Needs-You answered in the app ---------------------------------------------
@@ -558,13 +558,6 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
   const p = url.pathname;
   if (!p.startsWith('/api/brain/') && !p.startsWith('/api/setup') && !p.startsWith('/api/sessions')) return false;
 
-  if (p === '/api/brain/chat' && req.method === 'POST') {
-    const body = await readBody(req);
-    if (!body.message || !String(body.message).trim()) return json(res, 400, { error: 'message required' }), true;
-    if (!claudeBin) return json(res, 500, { error: 'claude CLI not found' }), true;
-    json(res, 200, await chat(claudeBin, body));
-    return true;
-  }
 
   // --- Sessions (T19): real Claude Code in a pty, streamed over /ws.
   if (p === '/api/sessions' && req.method === 'GET') return json(res, 200, { sessions: SESSIONS ? SESSIONS.list() : [], max: getConfig(VAULT).sessions.max_running }), true;
@@ -572,7 +565,37 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     if (!SESSIONS) return json(res, 500, { error: 'claude CLI not found' }), true;
     const b = await readBody(req);
     const model = ['opus', 'sonnet', 'haiku'].includes(b.model) ? b.model : 'sonnet';
-    try { return json(res, 200, { session: SESSIONS.create({ title: b.title, kind: b.kind, item: b.item, model, prompt: String(b.prompt || '').slice(0, 20000), outcomes: b.outcomes, suggest: b.suggest }).toJSON() }), true; } catch (e) { return json(res, 400, { error: e.message }), true; }
+    try {
+      const spec = sessionSpec(String(b.kind || ''), b.item || {});
+      // One open session per item: open the existing one instead of a second.
+      const key = JSON.stringify([b.kind, spec.item || b.item || null]);
+      const same = b.kind !== 'chat' && SESSIONS.list().find((x) => x.state !== 'done' && JSON.stringify([x.kind, x.item]) === key);
+      if (same) return json(res, 200, { session: SESSIONS.open(same.id).toJSON() }), true;
+      return json(res, 200, { session: SESSIONS.create({ ...spec, kind: b.kind, item: spec.item || b.item || null, model }).toJSON() }), true;
+    } catch (e) { return json(res, 400, { error: e.message }), true; }
+  }
+  const om = p.match(/^\/api\/sessions\/([0-9a-f]{10})\/outcome$/);
+  if (om && req.method === 'POST') {
+    const s = SESSIONS && SESSIONS.get(om[1]);
+    if (!s) return json(res, 404, { error: 'no such session' }), true;
+    const b = await readBody(req);
+    const o = (s.outcomes || []).find((x) => x.label === b.label);
+    if (!o) return json(res, 400, { error: 'no such outcome for this session' }), true;
+    try { const summary = await runOutcome(o.action, claudeBin); s.finish(o.label); return json(res, 200, { summary, session: s.toJSON() }), true; } catch (e) { return json(res, 400, { error: e.message }), true; }
+  }
+  if (p.match(/^\/api\/sessions\/[0-9a-f]{10}\/transcript$/) && req.method === 'GET') {
+    const id = p.split('/')[3];
+    const f = path.join(VAULT, '.bot', 'sessions', `${id}.jsonl`);
+    const lines = [];
+    try {
+      for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
+        let j; try { j = JSON.parse(l); } catch { continue; }
+        const m = j.message; if (!m || (j.type !== 'user' && j.type !== 'assistant')) continue;
+        const text = typeof m.content === 'string' ? m.content : (m.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
+        if (text.trim()) lines.push({ who: j.type, text });
+      }
+    } catch { return json(res, 404, { error: 'no transcript kept for this session' }), true; }
+    return json(res, 200, { lines }), true;
   }
   const sm = p.match(/^\/api\/sessions\/([0-9a-f]{10})\/(open|sleep|close)$/);
   if (sm && req.method === 'POST') {

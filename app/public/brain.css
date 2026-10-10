@@ -127,3 +127,14 @@ label.opt.line { display: flex; margin: 3px 0; }
 .grp-h { font-weight: 600; margin-bottom: 4px; display: flex; gap: 8px; align-items: center; }
 button.tiny { padding: 1px 8px; font-size: 11px; }
 .pill.running { background: #1f3352; color: var(--accent); }
+
+/* session panel (T20) */
+#spanel { width: 48%; min-width: 420px; flex: none; border-left: 1px solid var(--line); display: flex; flex-direction: column; background: #141414; }
+#spanel[hidden] { display: none; }
+#spanel header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.sp-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sp-title b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-outcomes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.sp-hint { font-size: 12px; padding: 4px 12px; }
+#sp-term { flex: 1; min-height: 0; padding: 6px; }
+button.suggest { background: var(--accent); color: #fff; box-shadow: 0 0 0 2px #1f3352; }
