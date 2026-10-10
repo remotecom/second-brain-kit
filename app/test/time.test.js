@@ -64,6 +64,9 @@ function vault(cfg) {
 test('the Morning run is due at morning_at in owner.timezone', () => {
   const S = require('../lib/schedule');
   const v = vault('owner:\n  timezone: "Asia/Kolkata"\nschedule:\n  enabled: true\n  morning_at: "06:00"\n');
+  // Not due at all before the owner starts the first run (Setup step 7).
+  assert.equal(S.isDue(v, new Date('2026-10-09T00:31:00Z')), false);
+  require('../lib/setup').markFirstRun(v);
   assert.equal(S.isDue(v, new Date('2026-10-09T00:29:00Z')), false); // 05:59 IST
   assert.equal(S.isDue(v, new Date('2026-10-09T00:31:00Z')), true);  // 06:01 IST
   fs.mkdirSync(path.join(v, '.bot', 'state'), { recursive: true });

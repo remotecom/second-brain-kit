@@ -46,9 +46,10 @@ const { syncGdriveMcp } = require('./gdrive-mcp');
 const { readOwner, getConfig } = require('./config');
 const { botArgs, botEnv } = require('./claude-call');
 const { script } = require('./kit');
-const { tool, SETTINGS_URL } = require('./connectors');
+const { tool, SETTINGS_URL, HEALTH_CALLS, judgeResult } = require('./connectors');
 const { pressButtons, connectorVerdict } = require('./buttons');
 const doctor = require('./doctor');
+const setup = require('./setup');
 const { runRescope, staged: stagedScope } = require('./linear-scope');
 const { resolveVault, STATE_DIR: INSTALL_STATE_DIR } = require('./install');
 
@@ -150,15 +151,6 @@ async function chat(claudeBin, { message, sessionId, model }) {
 //   bash   — runs a vault script, no tokens
 //   later  — designed, not built yet; shown so the board tells the truth
 
-// One cheap read per source, for the health probe. Tool names follow
-// config.yaml connectors.<source>.
-const HEALTH_CALLS = {
-  slack: ['slack_read_user_profile', (o) => ({ user_id: o.slack_user_id, response_format: 'concise' })],
-  linear: ['list_teams', () => ({ limit: 1 })],
-  notion: ['notion-get-users', () => ({ page_size: 1 })],
-  gcal: ['list_calendars', () => ({})],
-  gdrive: ['list_recent_files', () => ({ pageSize: 1 })],
-};
 
 const BOTS = [
   {
@@ -327,9 +319,8 @@ async function runHealth(run, claudeBin) {
   const status = {}, reasons = {};
   for (const w of want) {
     const c = r.calls.find((x) => x.name === w.t);
-    const text = c ? String(c.text || '') : '';
-    if (c && !/not authenticated|unauthori[sz]ed|authenticate first|invalid[_ ]token|insufficient scope/i.test(text) && !/^Error/i.test(text)) { status[w.k] = 'ok'; continue; }
-    if (c) { status[w.k] = /scope/i.test(text) ? 'auth' : 'error'; reasons[w.k] = text.slice(0, 120); continue; }
+    const j = judgeResult(c);
+    if (j.status !== 'none') { status[w.k] = j.status; if (j.why) reasons[w.k] = j.why; continue; }
     const v = connectorVerdict(r.servers, r.searches, [w.t]);
     status[w.k] = v ? 'auth' : 'error';
     reasons[w.k] = v ? `${v.server}: ${v.problem}` : 'no result came back';
@@ -543,7 +534,7 @@ function botsView() {
 
 async function handle(req, res, url, { json, readBody, claudeBin }) {
   const p = url.pathname;
-  if (!p.startsWith('/api/brain/')) return false;
+  if (!p.startsWith('/api/brain/') && !p.startsWith('/api/setup')) return false;
 
   if (p === '/api/brain/chat' && req.method === 'POST') {
     const body = await readBody(req);
@@ -551,6 +542,42 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     if (!claudeBin) return json(res, 500, { error: 'claude CLI not found' }), true;
     json(res, 200, await chat(claudeBin, body));
     return true;
+  }
+
+  // --- Setup page (T14). Probes press buttons; code reads; saves edit config as text.
+  if (p === '/api/setup' && req.method === 'GET') return json(res, 200, setup.view(VAULT)), true;
+  if (p === '/api/setup/probe' && req.method === 'POST') {
+    const body = await readBody(req);
+    const fn = { connectors: setup.probeConnectors, identity: setup.probeIdentity, scope: setup.probeScope, privacy: setup.probePrivacy }[body.step];
+    if (!fn) return json(res, 400, { error: 'unknown probe' }), true;
+    if (!claudeBin) return json(res, 500, { error: 'claude CLI not found' }), true;
+    const run = newRun({ id: `setup-${body.step}` });
+    try {
+      const r = await fn({ claudeBin, vault: VAULT, env: claudeEnv(), logLine }, run);
+      finish(run, 'ok', `${body.step} probe done`, null, r.cost);
+      json(res, 200, { result: r.result, view: setup.view(VAULT) });
+    } catch (e) { failRun(run, e); json(res, 200, { error: e.message, kind: e.kind, fix: e.fix }); }
+    return true;
+  }
+  if (p === '/api/setup/save' && req.method === 'POST') {
+    const body = await readBody(req);
+    try { const set = setup.save(VAULT, body.step, body.values || {}); doctorNow(true); json(res, 200, { set, view: setup.view(VAULT) }); } catch (e) { json(res, 400, { error: e.message }); }
+    return true;
+  }
+  if (p === '/api/setup/obsidian' && req.method === 'POST') {
+    const body = await readBody(req);
+    return json(res, 200, { ...setup.writeGraph(VAULT, { force: !!body.force }), view: setup.view(VAULT) }), true;
+  }
+  if (p === '/api/setup/first-run' && req.method === 'POST') {
+    const body = await readBody(req);
+    try { setup.save(VAULT, 'first-run', { bootstrap_days: body.bootstrap_days }); } catch (e) { return json(res, 400, { error: e.message }), true; }
+    if (isRunning('morning')) return json(res, 409, { error: 'the Morning run is already running' }), true;
+    const bot = BOTS.find((b) => b.id === 'morning');
+    const run = newRun(bot);
+    logLine(run, 'first run, started from Setup');
+    setup.markFirstRun(VAULT);
+    if (gated(run, 'morning')) Promise.resolve(bot.run(run, claudeBin, {})).catch((e) => failRun(run, e));
+    return json(res, 200, { runId: run.id, view: setup.view(VAULT) }), true;
   }
 
   // Repair creates only what is missing (folders, starter wiki files); it

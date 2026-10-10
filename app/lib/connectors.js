@@ -27,4 +27,25 @@ function connectorError(source, why) {
   });
 }
 
-module.exports = { tool, prefix, serverName, connectorError, NAMES, SETTINGS_URL };
+// One cheap read per source (health probe, Setup's connector probe).
+// slack_read_user_profile with no user_id reads the caller's own profile.
+const HEALTH_CALLS = {
+  slack: ['slack_read_user_profile', (o) => (o.slack_user_id && !/X{4,}/.test(o.slack_user_id) ? { user_id: o.slack_user_id, response_format: 'concise' } : { response_format: 'concise' })],
+  linear: ['list_teams', () => ({ limit: 1 })],
+  notion: ['notion-get-users', () => ({ page_size: 1 })],
+  gcal: ['list_calendars', () => ({})],
+  gdrive: ['list_recent_files', () => ({ pageSize: 1 })],
+};
+// The tool each source's sync cannot do without; Setup finds prefixes by it.
+const REQUIRED = { slack: 'slack_search_public_and_private', linear: 'list_issues', notion: 'notion-search', gcal: 'list_events', gdrive: 'search_files' };
+
+// A tool call's result as a status: ok | auth | error | none (no call came back).
+function judgeResult(c) {
+  if (!c) return { status: 'none' };
+  const text = String(c.text || '');
+  if (/insufficient scope|not authenticated|unauthori[sz]ed|authenticate first|invalid[_ ]token/i.test(text)) return { status: 'auth', why: text.slice(0, 120) };
+  if (/^Error/i.test(text)) return { status: 'error', why: text.slice(0, 120) };
+  return { status: 'ok' };
+}
+
+module.exports = { tool, prefix, serverName, connectorError, NAMES, SETTINGS_URL, HEALTH_CALLS, REQUIRED, judgeResult };

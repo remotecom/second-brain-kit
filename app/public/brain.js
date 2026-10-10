@@ -116,6 +116,10 @@
         }
       }
     }
+    const needsSetup = setup.some((f) => f.level === 'error');
+    html += `<div class="nav-foot">
+      <div class="nav-item ${sel === 'setup' ? 'sel' : ''}" data-sel="setup"><span class="lbl">Setup</span>${needsSetup ? '<span class="badge">!</span>' : ''}</div>
+      <a class="nav-item" href="obsidian://open?vault=${encodeURIComponent(vaultName)}"><span class="lbl">Open in Obsidian ↗</span></a></div>`;
     if (html !== lastNav) { lastNav = html; $('#nav').innerHTML = html; }
   }
 
@@ -123,6 +127,12 @@
   // scroll position of a preview you are reading.
   let lastPage = '';
   function paintPage() {
+    // The Setup page owns its own DOM (public/setup.js): mount it once.
+    if (sel === 'setup') {
+      if (lastPage !== '__setup__') { lastPage = '__setup__'; window.SetupPage.mount($('#page'), { api, esc, onChange: (showLog) => { if (showLog) { $('#drawer').hidden = false; store.set('brain.drawer', true); } load(); } }); }
+      return;
+    }
+    if (lastPage === '__setup__') window.SetupPage.unmount($('#page'));
     const g = GROUPS.find((x) => x.id === sel);
     const b = byId(sel);
     const html = sel === 'today' ? todayPage() : g ? groupPage(g) : b ? botPage(b) : '<div class="empty">Pick something on the left.</div>';

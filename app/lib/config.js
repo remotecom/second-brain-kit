@@ -97,7 +97,7 @@ function normalizeLegacy(src) {
   if (isObj(no) && no.watched_databases !== undefined && no.watched === undefined) { no.watched = no.watched_databases; delete no.watched_databases; }
   // v1 mixed folder titles and IDs in one list.
   const gd = d.sources.gdrive;
-  if (isObj(gd) && Array.isArray(gd.exclude_folders) && gd.exclude_folders.some((x) => !DRIVE_ID.test(String(x)))) {
+  if (Number(d.config_version || 1) < 2 && isObj(gd) && Array.isArray(gd.exclude_folders) && gd.exclude_folders.some((x) => !DRIVE_ID.test(String(x)))) {
     const titles = gd.exclude_folders.filter((x) => !DRIVE_ID.test(String(x)));
     gd.exclude_folders = gd.exclude_folders.filter((x) => DRIVE_ID.test(String(x)));
     gd.exclude_folder_titles = [...new Set([...(gd.exclude_folder_titles || []), ...titles])];
@@ -383,4 +383,55 @@ function convertLegacy(text) {
   return { text: res.text, added: res.added, moves };
 }
 
-module.exports = { getConfig, readOwner, requireOwner, validate, migrateConfig, convertLegacy, defaults, normalizeLegacy, findBlock, CONFIG_VERSION, localZone };
+// Set values by key path, as TEXT: comments and every other value survive.
+// values: { 'owner.name': 'Sam', 'sources.gcal.calendars': ['a@b.com'] }.
+// A key that exists is replaced in place (its lines, not its neighbours'); a
+// missing one is added to its parent block (created if needed). Then proves
+// that no other value changed.
+function setValues(text, values) {
+  const before = yaml.load(text) || {};
+  const lines = text.split('\n');
+  for (const [dotted, value] of Object.entries(values)) {
+    const keyPath = dotted.split('.');
+    const parent = keyPath.slice(0, -1), key = keyPath[keyPath.length - 1];
+    const b = findBlock(lines, keyPath);
+    if (b) {
+      // Keep a trailing comment on a one-line scalar ("name: x   # me").
+      const comment = (lines[b.header].match(/\s+#.*$/) || [''])[0];
+      const repl = dumpKey(key, value, b.indent);
+      if (repl.length === 1 && !isObj(value) && !Array.isArray(value) && comment && b.end === b.header + 1) repl[0] += comment;
+      lines.splice(b.header, b.end - b.header, ...repl);
+      continue;
+    }
+    if (parent.length) {
+      ensureBlock(lines, parent);
+      const pb = findBlock(lines, parent);
+      if (inlineValue(lines, pb)) throw new Error(`${parent.join('.')} is written inline; edit it by hand`);
+      lines.splice(pb.end, 0, ...dumpKey(key, value, childIndent(lines, pb)));
+    } else {
+      while (lines.length && lines[lines.length - 1] === '') lines.pop();
+      lines.push('', ...dumpKey(key, value, 0), '');
+    }
+  }
+  const out = lines.join('\n');
+  const after = yaml.load(out) || {};
+  // Every value not set here is unchanged.
+  const strip = (o) => { const c = clone(o); for (const k of Object.keys(values)) { const ks = k.split('.'); let x = c; for (const p of ks.slice(0, -1)) x = x && x[p]; if (x) delete x[ks[ks.length - 1]]; } return c; };
+  assertKept(strip(before), strip(after));
+  for (const [k, v] of Object.entries(values)) {
+    const got = k.split('.').reduce((x, p) => (x == null ? x : x[p]), after);
+    if (JSON.stringify(got) !== JSON.stringify(v)) throw new Error(`setValues: ${k} did not take`);
+  }
+  return out;
+}
+
+// Read config.yaml, set values, write it back. The app's only config writer.
+function writeValues(vault, values) {
+  const file = path.join(vault, 'config.yaml');
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch {}
+  fs.writeFileSync(file, setValues(text, values));
+  cache.delete(file);
+}
+
+module.exports = { setValues, writeValues, getConfig, readOwner, requireOwner, validate, migrateConfig, convertLegacy, defaults, normalizeLegacy, findBlock, CONFIG_VERSION, localZone };

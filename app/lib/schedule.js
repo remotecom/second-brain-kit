@@ -58,6 +58,7 @@ function writeState(vault, s) {
 function nextRun(vault, now = new Date()) {
   const s = settings(vault);
   if (!s.enabled) return null;
+  if (!require('./setup').firstRunStarted(vault)) return 'after you start the first run (Setup, step 7)';
   const tz = tzOf(vault), day = T.dayOf(now, tz);
   const due = T.at(day, s.morningAt, tz);
   const done = readState(vault).lastMorning === day;
@@ -124,6 +125,8 @@ async function runMorning(run, ctx) {
 function isDue(vault, now = new Date()) {
   const s = settings(vault);
   if (!s.enabled) return false;
+  // The owner starts the first run (Setup, step 7); the schedule takes over after.
+  if (!require('./setup').firstRunStarted(vault)) return false;
   const tz = tzOf(vault), day = T.dayOf(now, tz);
   return +now >= T.at(day, s.morningAt, tz) && readState(vault).lastMorning !== day;
 }
