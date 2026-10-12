@@ -1,191 +1,106 @@
-# Setup — from clone to first answer in ~30 minutes
+# Setup: from clone to first answer in about 30 minutes
 
-## 0. Prerequisites
+## 0. What you need
 
-- [Claude Code](https://claude.com/claude-code) installed and working.
-- A terminal with `bash`, `git`, and `date` (macOS or Linux).
-- Access to the sources you want: Slack, Linear, and/or Notion, and optionally
-  Google Calendar / Google Drive.
-- (Optional) [Obsidian](https://obsidian.md) to open the folder as a vault and
-  get the graph view. Everything works without it — it's just markdown.
+- macOS and Node 18 or newer (`node --version`).
+- [Claude Code](https://claude.com/claude-code), logged in with your
+  **claude.ai account** (`claude auth status` shows `"authMethod": "claude.ai"`).
+  An API key does not work: the bots reach your sources through claude.ai
+  connectors, which exist only under a claude.ai login.
+- Optional: [Obsidian](https://obsidian.md) for the graph view.
 
-## 1. Clone and name your vault
+The bots use your claude.ai plan. There is no per-call charge, but they share
+your plan's usage limits with you. `usage_share` in `config.yaml` (light,
+normal or heavy) caps how much of a day they may use.
 
-```bash
-git clone <this-repo> my-vault
-cd my-vault
-```
-
-You can call the folder anything. This is now *your* vault.
-
-> **Launch Claude Code from inside the vault** (`cd my-vault && claude`). The ops
-> write fetched Slack/Linear/Notion content to disk here; Claude Code's safety
-> classifier can block writes to folders *outside* the session's working
-> directory, so keep the vault as the working dir (or an explicitly allowed
-> path). If a daily-file write ever gets blocked, this is almost always why.
-
-## 2. Stop Claude Code from deleting your memories (do this first)
-
-Claude Code defaults to a **30-day transcript retention**, and your project
-memories live inside the transcript dir — so untouched projects get their
-memory swept. Set retention to effectively-never by merging
-`settings.example.json` into `~/.claude/settings.json`:
-
-```jsonc
-{
-  "cleanupPeriodDays": 36500
-}
-```
-
-Merge the key — don't overwrite your existing settings. This is the single most
-important step; skipping it silently loses your raw memory layer.
-
-## 3. Connect your MCP sources
-
-In Claude Code, run `/mcp` and connect the connectors for the sources you
-enabled. The ops call these tool families:
-
-| Source | What you need | Default | Status |
-|---|---|---|---|
-| Slack  | a Slack MCP with search + thread-read + send-message | `enabled: true` | works |
-| Linear | a Linear MCP with list/get issues, projects, initiatives, docs, comments | `enabled: true` | works |
-| Notion | a Notion MCP with search, fetch, comments, data-source query | `enabled: true` | works |
-| Google Calendar | Calendar MCP with `list_calendars`, `list_events`, `get_event` | `enabled: false` | works, opt-in |
-| Google Drive | Drive MCP with `search_files`, `list_recent_files`, `read_file_content` | `enabled: false` | works, opt-in |
-| Gmail | *(not usable yet — see below)* | `enabled: false` | **op not written** |
-
-**Two different meanings of `enabled: false`, don't confuse them.** Calendar and
-Drive are implemented and validated against a real account; they ship off only
-so you opt into pulling personal-account data deliberately. Flip them to `true`
-once `/mcp` shows the connector working and you get a real sync.
-
-**Gmail is different: there is no `sync gmail` op.** Setting `enabled: true`
-does nothing. The spec is written (CLAUDE.md § Sync (Gmail)) and the directory
-is scaffolded, but the fetch was never built, and separately the Gmail connector
-must be granted mail scopes before it could run at all. Because a silent `0`
-would be indistinguishable from a working source with nothing new, that class
-reports `gmail/threads=SKIPPED-not-implemented` in every `Deltas walked:` line.
-That is expected output, not a fault.
-
-If a connector isn't available for a source, set `enabled: false` for it in
-`config.yaml` and the ops will skip it.
-
-**A Google connector shows up before it works.** Until you connect it in
-`/mcp`, it exposes only `authenticate` / `complete_authentication` — the real
-tools do not exist yet, so a sync would find nothing and look broken. And plenty
-of Workspace tenants block third-party Drive/Gmail OAuth scopes at the admin
-level, so you may not be able to enable them at all. Flip `enabled: true` only
-once `/mcp` shows the connector actually returning data.
-
-**First run of a Google source is slow.** With no `.last-sync` yet, the source
-back-fills `bootstrap_horizon_days` of history once (default 365) before
-settling into the rolling window. That is expected, not a hang.
-
-**Read the sensitivity denylist before enabling Calendar or Drive.** These are
-personal accounts (the denylist also covers Gmail, whenever its op lands).
-`config.yaml`'s `exclude_labels` / `exclude_categories` / `exclude_folders` /
-`include_private` are applied at fetch time so excluded
-content never lands on disk. `.gitignore` only keeps things out of git — it does
-not keep them out of the plaintext files every vault session reads, or out of
-synthesized wiki pages.
-
-## 4. Fill in your config
+## 1. Install
 
 ```bash
-cp config.example.yaml config.yaml
+git clone https://github.com/remotecom/second-brain-kit.git ~/second-brain-kit
+~/second-brain-kit/app/bin/second-brain setup --vault ~/SecondBrain
 ```
 
-Edit `config.yaml`:
+Setup asks for your name, work email and Slack member ID (Slack → your
+profile → *More* → *Copy member ID*). Then it:
 
-- `owner.slack_user_id` — your Slack member ID (Slack → your profile → *More* →
-  *Copy member ID*).
-- `sources.linear.team_key` — the Linear team you want synthesized.
-- `sources.notion.watched_databases` — leave empty to start; add databases you
-  live in (meeting notes, OKRs, trackers). First `sync notion` bootstraps the
-  allowlist by name and asks you to confirm.
-- Leave `owner.notion_user_id` blank; it's resolved and cached on first run.
+1. checks macOS, Node and the Claude Code login,
+2. creates the vault folder: raw source folders, an empty wiki, `config.yaml`,
+   a `.gitignore` that keeps your data out of git, and the kit's block in
+   `CLAUDE.md`,
+3. starts the app at login (a LaunchAgent, `dev.secondbrain.app`),
+4. lists anything that still stops the bots, with the fix.
 
-## 5. Seed the wiki scaffolding
+Run setup again at any time. It only adds what is missing; it never changes a
+file that exists.
+
+**The vault is private.** Keep it outside the kit folder (setup refuses a
+vault inside it). The kit is public code; your vault is your data.
+
+## 2. Connect your sources
+
+The bots use the claude.ai connectors on your account.
+
+1. Open claude.ai → Settings → Connectors.
+2. Connect Slack, Linear, Notion, Google Calendar and Google Drive (only the
+   ones you want).
+3. In the app, open **Checks → Health** and press Run. Each source shows
+   `ok`, or the exact fix.
+
+Turn a source off with `enabled: false` under `sources.<name>` in
+`config.yaml`. The Morning run then skips it and says so.
+
+## 3. Set your scope
+
+Edit `config.yaml` in the vault (every key is explained in the kit's
+`config.example.yaml`):
+
+- `sources.linear.scope`: ONE of `initiative` (a Linear initiative ID; its
+  whole sub-tree is synced) or `team` (a team key such as `ENG`).
+- `sources.gcal.calendars`: the calendars to sync. Start with your own work
+  calendar. Syncing everything readable would pull in colleagues' calendars.
+- `sources.gdrive.exclude_folders` / `exclude_folder_titles`: folder trees that
+  never sync. The Google Meet trees are excluded by default.
+- `owner.timezone`: day files and the Morning run use it.
+
+Read the **sensitivity denylist** in the vault's `CLAUDE.md` before you turn on
+Calendar or Drive. Exclusions apply at fetch time, so excluded content never
+reaches the disk.
+
+## 4. First run
+
+In the app, press **Run** on the Morning run (or on one sync at a time). The
+first run of each source back-fills `bootstrap_days` (default 7) of history
+once; after that the rolling window takes over.
+
+After the first run:
+
+- **Today** shows the Brief and anything waiting on you.
+- **Resolve** shows questions Verify could not settle alone. Answer them in
+  the app (or tick them in `Needs-You.md` in Obsidian).
+- The Morning run repeats every day at `schedule.morning_at`.
+
+## 5. Ask questions
+
+Open the vault folder in Claude Code (`cd ~/SecondBrain && claude`), in
+Cowork, or in Obsidian. The vault's `CLAUDE.md` tells any Claude session how
+the vault works, and that the app owns the syncs and ingest. Ask anything:
+
+```
+what do we know about <topic>?
+```
+
+## If something is wrong
 
 ```bash
-cp templates/index.template.md wiki/index.md
-cp templates/log.template.md   wiki/log.md
-cp templates/principles/outbound-voice.example.md wiki/principles/outbound-voice.md
+~/second-brain-kit/app/bin/second-brain doctor
 ```
 
-Then open `wiki/principles/outbound-voice.md` and rewrite it in your own voice
-(or delete it if you don't want an outbound gate).
+It prints what stops the bots, and the fix for each item. The app's Today page
+shows the same list, with a Repair button for missing folders and files.
 
-Optionally paste `templates/global-claude-md.template.md` into your
-`~/.claude/CLAUDE.md` so auto-memory writes memories the vault can ingest.
+## Note on Claude Code memory
 
-## 6. Make the taxonomy yours (optional but recommended)
-
-The default `wiki/` sections suit a partnerships / solutions-architecture
-function. If yours is different, edit `wiki.sections` in `config.yaml` and
-rename the folders under `wiki/` to match. Examples:
-
-| Function | Sections that tend to matter |
-|---|---|
-| Engineering | services · runbooks · postmortems · rfcs · dependencies · people |
-| BizOps | accounts · processes · metrics · vendors · decisions · people |
-| Product | features · personas · competitors · experiments · decisions · people |
-
-Keep `principles/`, `people/`, `initiatives/`, `concepts/`, `workflows/` — they
-are useful in almost every function.
-
-## 7. First run
-
-In Claude Code, from the vault directory:
-
-```
-sync            # pulls the last 4 days from each enabled source
-ingest          # folds the new raw files into the wiki
-```
-
-Then ask it something:
-
-```
-what do we know about <a project / person / topic you touched this week>?
-```
-
-Day one it will be thin — that's expected. Run `sync` + `ingest` on your normal
-cadence (daily or a few times a week). Within a couple of weeks it starts
-answering things faster than you could find them.
-
-## 8. Keep it healthy
-
-- `sync` before `ingest`, always.
-- Run `bash scripts/refresh-project-symlinks.sh` before `ingest` if you work
-  across multiple Claude Code projects (it re-links memory dirs; a dangling
-  symlink is skipped silently).
-- `lint` occasionally to catch orphans, stale pages, dead links, and taxonomy
-  drift. `bash scripts/linkrot-lint.sh` is the mechanical half — it should exit
-  `0` and print **six** sections. Anything less means it aborted early.
-- `bash tests/run.sh` after changing anything in `scripts/` or `.gitignore`.
-  It pins the watermark-cutoff behaviour, the both-directions leak test, and the
-  version-skew guard between `delta-walk.sh` and `raw-classes.sh`.
-
-## Troubleshooting
-
-- **`sync` finds nothing** — check the MCP is connected (`/mcp`), that the
-  source is `enabled: true`, and that your `config.yaml` IDs/team are right.
-- **`lint` prints a short, clean-looking report** — count the sections. A report
-  that stops before `## 2.` has aborted, not passed. `bash tests/run.sh` checks
-  this specifically.
-- **`ingest` walks 0 files** — the watermark (`wiki/.last-ingest`) may be ahead
-  of your raw file dates, or a project symlink is dangling. See the ingest op in
-  `CLAUDE.md`.
-- **A daily-file write got blocked** — you're likely running Claude Code from
-  outside the vault. `cd` into the vault and launch `claude` from there (see
-  step 1), or add the vault path to your allowed dirs.
-- **`Deltas walked:` says `gmail/threads=SKIPPED-not-implemented`** — expected.
-  There is no `sync gmail` op yet. The class is reported explicitly rather than
-  as `0`, because a `0` would be indistinguishable from a working source with an
-  empty delta. Nothing to fix.
-- **`RAW_UNIMPLEMENTED: unbound variable`, or `raw-classes.sh ... is stale`** —
-  you have a newer `scripts/delta-walk.sh` beside an older
-  `scripts/raw-classes.sh`. They are updated together; copy both.
-- **Memories vanished** — you skipped step 2. Set `cleanupPeriodDays`.
-- **Want to version your vault** — do it in a *separate private repo*. Don't
-  push your data back to this template; that's what `.gitignore` protects.
+Claude Code keeps each project's memory in `~/.claude/projects/…/memory`. The
+kit links those folders INTO the vault (`projects/`), so your memories live in
+the vault and are ingested like any other source. Verify checks the links every
+run.
