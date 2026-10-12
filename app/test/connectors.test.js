@@ -48,3 +48,10 @@ for (const mode of ['needs-auth', 'no-tools']) {
     assert.ok(!lines.some((l) => /round 2/.test(l)), 'no retry rounds');
   });
 }
+
+test('collect(): a lone job takes the result even when the model added an argument', async () => {
+  const ctx = { claudeBin: path.join(__dirname, 'fake', 'claude-extra-arg.js'), vault: os.tmpdir(), env: { ...process.env, PATH: `${path.dirname(process.execPath)}:${process.env.PATH}` }, logLine: () => {} };
+  const r = await collect(ctx, {}, 'mcp__claude_ai_Google_Calendar__list_calendars', [{ args: {} }], { pageOf: (j) => (Array.isArray(j.calendars) ? { items: j.calendars, next: null } : null), maxRounds: 1 });
+  assert.deepEqual(r.unfinished, []);
+  assert.deepEqual([...r.results.values()].flat().map((c) => c.id), ['me@example.com']);
+});

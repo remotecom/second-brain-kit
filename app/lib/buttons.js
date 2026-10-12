@@ -139,8 +139,12 @@ async function collect(ctx, run, tool, jobs, { pageOf, batch = 25, budget = 2, m
         if (!byKey.has(k)) byKey.set(k, []);
         byKey.get(k).push(c);
       }
+      // One job in the chunk: every call to the tool is for it, even when the
+      // model added an argument (an empty {} came back as {pageSize: 100}, so
+      // the result matched nothing and the probe saw no calendars; 2026-10-12).
+      const only = chunk.length === 1 && !byKey.has(chunk[0].key) ? r.calls : null;
       for (const p of chunk) {
-        const calls = byKey.get(p.key) || [];
+        const calls = only || byKey.get(p.key) || [];
         let next = null, got = false;
         for (const c of calls) {
           let j; try { j = JSON.parse(c.text); } catch { continue; }
