@@ -36,6 +36,7 @@ test('validate: folder names, duplicates, sizes, tags', () => {
   assert.throws(() => shape.validate(ok(['ac counts', 'deals', 'people'])), /not a folder name/);
   assert.throws(() => shape.validate(ok(['../x', 'deals', 'people'])), /not a folder name/);
   assert.throws(() => shape.validate(ok(['deals', 'deals', 'people'])), /twice/);
+  assert.throws(() => shape.validate(ok(['projects', 'deals', 'people'])), /raw source folder.*initiatives/);
   assert.deepEqual(shape.validate({ ...ok(['deals', 'people', 'concepts']), tags: ['domain', 'deal/'] }).tags, ['domain/', 'deal/']);
   assert.throws(() => shape.validate({ ...ok(['deals', 'people', 'concepts']), tags: ['bad tag/'] }), /tag namespace/);
 });

@@ -561,7 +561,7 @@ function sessionSpec(kind, item = {}) {
       `The current draft is in ${path.relative(VAULT, wikiShape.STATE(VAULT))} under "draft" (sections with name and note, and tag namespaces):`,
       '```json', JSON.stringify({ sections: draft.sections, tags: draft.tags }, null, 2), '```',
       `Presets the app has: ${Object.entries(v.presets).map(([id, p]) => `${id} (${p.label}: ${p.sections.join(', ')})`).join('; ')}.`,
-      'First ask what they do and who they work with, if the sample does not make it clear. Then propose a shape and why, from the sample. Keep people, concepts, workflows and principles. 6 to 12 sections, plural lowercase folder names, a note under 15 words each, tag namespaces like domain/ ending in /.',
+      'First ask what they do and who they work with, if the sample does not make it clear. Then propose a shape and why, from the sample. Keep people, concepts, workflows and principles. Never name a section after a raw source folder (projects, slack, linear, notion, gdrive, gmail, gcal, docs): projects become initiatives. 6 to 12 sections, plural lowercase folder names, a note under 15 words each, tag namespaces like domain/ ending in /.',
       `When the owner agrees, write the agreed shape into the "draft" key of ${path.relative(VAULT, wikiShape.STATE(VAULT))} (keep the file's other keys). That is the ONLY file you may change. Then tell the owner to press "Use this shape".`,
       ...(v.firstIngestDone ? [`The wiki already has pages: ${Object.entries(v.counts).filter(([, k]) => k).map(([n, k]) => `${n}/ ${k}`).join(', ')}. A section that holds pages cannot be removed here.`] : []),
       SUGGEST_RULE(outcomes.map((o) => o.label))].join('\n') };
