@@ -8,7 +8,7 @@ STATE="${SECOND_BRAIN_STATE_DIR:-$HOME/.second-brain}"
 # node: PATH first, then the usual install places (a login shell may not have nvm).
 NODE="$(command -v node || true)"
 for n in /opt/homebrew/bin/node /usr/local/bin/node "$HOME/.volta/bin/node"; do [ -n "$NODE" ] && break; [ -x "$n" ] && NODE="$n"; done
-[ -n "$NODE" ] || { echo "second-brain: node not found. Install Node 18 or newer." >&2; exit 1; }
+[ -n "$NODE" ] || { echo "second-brain: node not found. Install Node 18 or newer: brew install node, or https://nodejs.org" >&2; exit 1; }
 
 if [ "${1:-open}" != "open" ]; then SECOND_BRAIN_NODE="$NODE" exec "$NODE" "$APP_DIR/cli.js" "$@"; fi
 

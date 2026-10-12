@@ -35,10 +35,26 @@ Second Brain app. Your vault (synced sources, wiki, `config.yaml`) is a
 separate private folder that setup creates. It never enters this repo, and the
 code holds no partner, customer or personal names.
 
-## Quickstart
+## Before you start
 
-You need macOS, Node 18 or newer, and Claude Code logged in with your
-claude.ai account.
+You need these on your Mac. `second-brain setup` checks each one and prints
+the fix for anything missing, so you can also just run it and follow it.
+
+| What | How to get it | Setup checks it |
+|---|---|---|
+| macOS | | yes |
+| Apple's developer tools (git, python3) | `xcode-select --install` in Terminal | python3, as a warning: the session panel needs it |
+| Node 18 or newer | `brew install node`, or the installer at [nodejs.org](https://nodejs.org) | yes |
+| [Claude Code](https://claude.com/claude-code) | `npm install -g @anthropic-ai/claude-code` | yes |
+| A claude.ai login in Claude Code (not an API key) | run `claude`, then log in with your claude.ai account | yes |
+| claude.ai connectors for the sources you want: Slack, Linear, Notion, Google Calendar, Google Drive | claude.ai → Settings → Connectors | on the Setup page (step 1) |
+| Optional: [Obsidian](https://obsidian.md) | for the graph view | |
+
+The bots use your claude.ai plan. There is no per-call charge, but they share
+your plan's usage limits; `usage_share` in `config.yaml` caps their part.
+Gmail is not written yet.
+
+## Quickstart
 
 ```bash
 git clone https://github.com/remotecom/second-brain-kit.git ~/second-brain-kit
@@ -70,16 +86,6 @@ same for everyone. Only two things are per-function, both in `config.yaml`:
 Day one, this is empty and unimpressive — you're just syncing. The value
 **compounds**: a week in you're feeding it, a month in it answers things you'd
 forgotten you knew. Give it a few weeks before you judge it.
-
-## Requirements
-
-- macOS, Node 18 or newer.
-- [Claude Code](https://claude.com/claude-code), logged in with a claude.ai
-  account. The bots reach your sources through claude.ai connectors and share
-  your plan's usage limits (there is no per-call charge).
-- claude.ai connectors for the sources you turn on: Slack, Linear, Notion,
-  Google Calendar, Google Drive. (Gmail is not written yet.)
-- Optional: [Obsidian](https://obsidian.md) for the graph view.
 
 ## Contributing
 

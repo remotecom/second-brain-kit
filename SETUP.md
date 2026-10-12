@@ -2,8 +2,12 @@
 
 ## 0. What you need
 
-- macOS and Node 18 or newer (`node --version`).
-- [Claude Code](https://claude.com/claude-code), logged in with your
+- macOS, with Apple's developer tools (`xcode-select --install`: git and
+  python3).
+- Node 18 or newer (`node --version`; install with `brew install node` or
+  from https://nodejs.org).
+- [Claude Code](https://claude.com/claude-code)
+  (`npm install -g @anthropic-ai/claude-code`), logged in with your
   **claude.ai account** (`claude auth status` shows `"authMethod": "claude.ai"`).
   An API key does not work: the bots reach your sources through claude.ai
   connectors, which exist only under a claude.ai login.
@@ -68,9 +72,16 @@ reaches the disk.
 
 ## 4. First run
 
-In the app, press **Run** on the Morning run (or on one sync at a time). The
-first run of each source back-fills `bootstrap_days` (default 7) of history
-once; after that the rolling window takes over.
+On the Setup page, step 7, pick a back-fill (3 days for a quick try, 7 by
+default) and press **Start the first run**. The first run of each source
+back-fills that much history once; after that the rolling window takes over.
+
+The first run syncs, then waits for your **wiki shape** (step 8): the sections
+your wiki is built around (accounts, services, partners, and so on). Start
+from a preset, press **Suggest from my data** (Claude reads the synced names
+and titles and proposes sections, a few cents), or **Talk it through** in a
+Claude session. Edit the list, then press **Use this shape and start the first
+ingest**. You can add sections later.
 
 After the first run:
 

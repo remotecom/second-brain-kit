@@ -58,14 +58,14 @@ function prerequisites() {
   const problems = [];
   if (process.platform !== 'darwin') problems.push('Second Brain runs on macOS only (it uses launchd and the macOS pty).');
   const major = Number(process.versions.node.split('.')[0]);
-  if (major < 18) problems.push(`Node ${process.versions.node} is too old; install Node 18 or newer.`);
+  if (major < 18) problems.push(`Node ${process.versions.node} is too old; install Node 18 or newer (\`brew install node\`, or https://nodejs.org).`);
   const claude = install.findClaude();
   let auth = null;
-  if (!claude) problems.push('Claude Code is not installed. Install it from https://claude.com/claude-code, log in, then run setup again.');
+  if (!claude) problems.push('Claude Code is not installed. Run `npm install -g @anthropic-ai/claude-code` (or see https://claude.com/claude-code), run `claude` and log in with your claude.ai account, then run setup again.');
   else {
     auth = install.claudeAuth(claude);
     if (!auth || !auth.loggedIn) problems.push('Claude Code is not logged in. Run `claude`, log in with your claude.ai account, then run setup again.');
-    else if (auth.authMethod && auth.authMethod !== 'claude.ai') problems.push(`Claude Code uses ${auth.authMethod}; the bots need a claude.ai login (they reach your sources through claude.ai connectors).`);
+    else if (auth.authMethod && auth.authMethod !== 'claude.ai') problems.push(`Claude Code uses ${auth.authMethod}; the bots need a claude.ai login (they reach your sources through claude.ai connectors). Run \`claude auth login\` and pick your claude.ai account.`);
   }
   return { problems, claude, auth };
 }
