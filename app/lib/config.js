@@ -250,6 +250,8 @@ function inlineValue(lines, b) {
 
 // Add every key the schema has and the text lacks, as text, with defaults.
 // Never edits an existing line; then proves it changed no value.
+const OWNED_MAPS = new Set(['wiki.section_notes']);
+
 function migrateConfig(text, schema = defaults()) {
   const before = yaml.load(text) || {};
   const lines = text.split('\n');
@@ -258,7 +260,9 @@ function migrateConfig(text, schema = defaults()) {
     for (const [k, v] of Object.entries(node)) {
       const p = [...keyPath, k];
       if (have && Object.prototype.hasOwnProperty.call(have, k)) {
-        if (isObj(v) && isObj(have[k])) {
+        // A map whose keys are the owner's own (one note per THEIR wiki
+        // section) is never filled in from the defaults.
+        if (isObj(v) && isObj(have[k]) && !OWNED_MAPS.has(p.join('.'))) {
           const b = findBlock(lines, p);
           if (b && !inlineValue(lines, b)) walk(v, have[k], p);
         }

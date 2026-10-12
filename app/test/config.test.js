@@ -154,3 +154,10 @@ test('requireOwner rejects example placeholders', () => {
   const v = vaultWith('owner:\n  name: "Your Name"\n  slack_user_id: "U000XXXXX"\n');
   assert.throws(() => C.requireOwner(v, ['name', 'slack_user_id']), /owner\.name, owner\.slack_user_id/);
 });
+
+test('migrateConfig never fills wiki.section_notes from the defaults', () => {
+  const text = 'config_version: 2\nwiki:\n  sections:\n    - accounts\n    - people\n  section_notes:\n    accounts: customer companies\n';
+  const r = C.migrateConfig(text);
+  assert.ok(!r.added.some((k) => k.startsWith('wiki.section_notes.')), r.added.join(', '));
+  assert.match(r.text, /accounts: customer companies/);
+});
