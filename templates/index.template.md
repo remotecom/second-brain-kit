@@ -1,13 +1,11 @@
 # Wiki index
 
-LLM-maintained synthesis layer over `projects/`, `slack/`, `linear/`, and
-`notion/`. See `CLAUDE.md` for schema and operations. Every page here is mutable
-by `ingest`; do not hand-edit unless you know the manual-edit rule.
+The catalog of every wiki page, grouped by the sections in `config.yaml`
+(`wiki.sections`). Ingest keeps it current. The raw sources it is built from
+are `projects/`, `slack/`, `linear/`, `notion/`, `gdrive/`, `gmail/` and `gcal/`;
+see `CLAUDE.md` for the schema and the operations.
 
-> Copy this file to `wiki/index.md` on first setup. `ingest` keeps it current —
-> it catalogs every wiki page, grouped by the sections in your `config.yaml`.
-
-**0 pages** as of <DATE> (fresh vault).
+**0 pages** so far (fresh vault).
 
 ## Partners
 _(none yet — run your first `sync` + `ingest`)_

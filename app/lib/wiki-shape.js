@@ -218,14 +218,52 @@ async function suggest(ctx, run, { role } = {}) {
 }
 
 // --- apply -----------------------------------------------------------------------
+const title = (n) => n.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+
+// wiki/index.md: one "## Section" heading per section, in the shape's order.
+// Lines under a heading that stays move with it; a heading that goes but has
+// lines is kept at the end, so nothing in the index is lost.
+function reshapeIndex(text, names) {
+  const lines = text.split('\n');
+  const first = lines.findIndex((l) => /^## /.test(l));
+  const head = first < 0 ? lines : lines.slice(0, first);
+  const blocks = new Map();
+  let cur = null;
+  for (const l of first < 0 ? [] : lines.slice(first)) {
+    if (/^## /.test(l)) { cur = l.slice(3).trim(); blocks.set(cur, []); continue; }
+    blocks.get(cur).push(l);
+  }
+  const body = (b) => (b || []).filter((l) => l.trim() && !/^_\(none yet/.test(l.trim()));
+  const out = [...head];
+  while (out.length && !out[out.length - 1].trim()) out.pop();
+  const used = new Set();
+  for (const n of names) {
+    const h = [...blocks.keys()].find((k) => k.toLowerCase() === title(n).toLowerCase()) || title(n);
+    used.add(h);
+    out.push('', `## ${h}`, ...body(blocks.get(h)));
+  }
+  for (const [h, b] of blocks) if (!used.has(h) && body(b).length) out.push('', `## ${h}`, ...body(b));
+  return `${out.join('\n')}\n`;
+}
+
 function apply(v, shape) {
   const s = validate(shape, v);
+  const before = current(v).sections.map((x) => x.name);
   writeValues(v, {
     'wiki.sections': s.sections.map((x) => x.name),
     'wiki.section_notes': Object.fromEntries(s.sections.map((x) => [x.name, x.note])),
     'tags.namespaces': s.tags,
   });
   for (const x of s.sections) fs.mkdirSync(path.join(v, 'wiki', x.name), { recursive: true });
+  // Folders of dropped sections that setup made and nothing filled: remove.
+  const keep = new Set(s.sections.map((x) => x.name));
+  for (const n of before.filter((x) => !keep.has(x))) {
+    const d = path.join(v, 'wiki', n);
+    let left = null; try { left = fs.readdirSync(d); } catch { continue; }
+    if (left.every((f) => f === '.gitkeep')) fs.rmSync(d, { recursive: true, force: true });
+  }
+  const idx = path.join(v, 'wiki', 'index.md');
+  try { fs.writeFileSync(idx, reshapeIndex(fs.readFileSync(idx, 'utf8'), s.sections.map((x) => x.name))); } catch {}
   try { require('./kit-block').update(v, { write: true }); } catch {}
   writeState(v, { appliedAt: new Date().toISOString(), applied: s });
   return s;
@@ -240,4 +278,4 @@ function view(v) {
   };
 }
 
-module.exports = { PRESETS, preset, current, validate, sample, suggest, suggestPrompt, parseShape, apply, view, needsShape, readState, writeState, STATE };
+module.exports = { PRESETS, preset, reshapeIndex, current, validate, sample, suggest, suggestPrompt, parseShape, apply, view, needsShape, readState, writeState, STATE };

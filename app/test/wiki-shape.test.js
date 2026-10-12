@@ -96,3 +96,21 @@ test('sample: counts channels, projects and titles; no message bodies', () => {
   assert.match(s, /Weekly sync \(2\)/);
   assert.doesNotMatch(s, /secret body text/);
 });
+
+test('apply reshapes the index and removes the empty default folders it dropped', () => {
+  const v = vault();
+  shape.apply(v, shape.preset('partnerships'));
+  for (const n of ['partners', 'customers']) fs.writeFileSync(path.join(v, 'wiki', n, '.gitkeep'), '');
+  fs.writeFileSync(path.join(v, 'wiki', 'customers', 'acme.md'), 'x');
+  fs.writeFileSync(path.join(v, 'wiki', 'index.md'), '# Wiki index\n\nIntro.\n\n## Partners\n_(none yet — run your first sync)_\n\n## Customers\n- [[wiki/customers/acme]]\n\n## Principles\n- [[wiki/principles/voice]] — mine\n');
+  // customers holds a page, so the sales shape must keep it.
+  shape.apply(v, { ...shape.preset('sales'), sections: [...shape.preset('sales').sections, { name: 'customers', note: 'kept' }] });
+  assert.ok(!fs.existsSync(path.join(v, 'wiki', 'partners')), 'empty default folder removed');
+  assert.ok(fs.existsSync(path.join(v, 'wiki', 'customers', 'acme.md')));
+  const idx = fs.readFileSync(path.join(v, 'wiki', 'index.md'), 'utf8');
+  assert.match(idx, /^Intro\.$/m);
+  assert.match(idx, /## Accounts/);
+  assert.doesNotMatch(idx, /## Partners/);
+  assert.match(idx, /## Customers\n- \[\[wiki\/customers\/acme\]\]/);
+  assert.match(idx, /## Principles\n- \[\[wiki\/principles\/voice\]\] — mine/);
+});
