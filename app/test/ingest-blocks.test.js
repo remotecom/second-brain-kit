@@ -225,3 +225,11 @@ test('changedOnly: separate changes are joined with an ellipsis', () => {
   assert.ok(out.split('\n').includes('…'));
   assert.ok(out.includes('- row1') && out.includes('- row10')); // the removed originals are listed
 });
+
+test('stampFrontmatter: a source with and without .md is one entry; old pairs collapse', () => {
+  const page = '---\nname: X\ntype: wiki\nsources:\n  - slack/2026-10-12\n  - linear/issues/ENG-1.md\n  - linear/issues/ENG-1\nupdated: 2026-10-01\n---\n# X\n';
+  const out = I.stampFrontmatter(page, ['slack/2026-10-12.md', 'gcal/2026-10-12.md'], '2026-10-12');
+  const list = out.split('\n').filter((l) => l.startsWith('  - ')).map((l) => l.slice(4));
+  assert.deepEqual(list, ['slack/2026-10-12', 'linear/issues/ENG-1.md', 'gcal/2026-10-12.md']);
+  assert.match(out, /^# X$/m);
+});

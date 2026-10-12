@@ -90,8 +90,14 @@ function stampFrontmatter(text, sources, date) {
   let end = i + 1;
   while (end < lines.length && /^\s+-\s/.test(lines[end])) end++;
   have = lines.slice(i + 1, end).map((l) => l.replace(/^\s+-\s*/, '').replace(/^["']|["']$/g, '').trim());
-  const add = sources.filter((s) => !have.includes(s));
-  lines.splice(end, 0, ...add.map((s) => `  - ${s}`));
+  // "slack/2026-10-12" (the model's wikilink form) and "slack/2026-10-12.md"
+  // (the manifest's path) are one source: compare without ".md", keep the
+  // first spelling, and drop pairs an earlier run already wrote.
+  const key = (x) => x.replace(/\.md$/, '');
+  const seen = new Set();
+  const kept = have.filter((x) => (seen.has(key(x)) ? false : seen.add(key(x))));
+  const add = sources.filter((x) => !seen.has(key(x)) && seen.add(key(x)));
+  lines.splice(i + 1, end - (i + 1), ...kept.map((x) => `  - ${x}`), ...add.map((x) => `  - ${x}`));
   const u = lines.findIndex((l) => /^updated:/.test(l));
   if (u >= 0) lines[u] = `updated: ${date}`; else lines.push(`updated: ${date}`);
   return `---\n${lines.join('\n')}\n---\n${body}`;
