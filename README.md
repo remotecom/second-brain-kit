@@ -86,3 +86,8 @@ forgotten you knew. Give it a few weeks before you judge it.
 See [`CLAUDE.md`](./CLAUDE.md) for the repo layout and the rules (no private
 names anywhere, config instead of hardcoding). Run `bash tests/run.sh` before
 every commit.
+
+## License
+
+MIT. See [`LICENSE`](./LICENSE). The license covers the code in this repo,
+not the data in your vault.
