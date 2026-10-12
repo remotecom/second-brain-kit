@@ -78,7 +78,7 @@
   const todos = () => bots.filter((b) => b.todo).map((b) => ({ bot: b, todo: b.todo }));
 
   // After a session ends, go to the page its result shows on.
-  const DONE_PAGE = { restructure: () => 'restructure', needs: () => 'resolve', repair: () => 'today', connector: (s) => s.item && s.item.bot, findings: (s) => s.item && s.item.bot };
+  const DONE_PAGE = { restructure: () => 'restructure', needs: () => 'resolve', repair: () => 'today', connector: (s) => s.item && s.item.bot, findings: (s) => s.item && s.item.bot, shape: () => 'setup' };
   window.SessionPanel.init({ api, esc: (x) => esc(x),
     onChange: (showLog) => { if (showLog && !document.body.classList.contains('with-spanel')) { $('#drawer').hidden = false; store.set('brain.drawer', true); } load(); },
     onDone: (s) => { const f = s && DONE_PAGE[s.kind]; const id = f && f(s); if (id) { cmp = null; select(id); } } });

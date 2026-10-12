@@ -83,10 +83,14 @@ corrupt them.
 
 ## Wiki structure
 
-One folder per entity type in `{{WIKI_SECTIONS}}` (see `config.yaml`). The
-default set (partners, systems, integrators, problems, people, incidents,
-initiatives, principles, concepts, workflows, customers) suits a partnerships /
-solutions-architecture function — swap it for yours. Plus:
+One folder per entity type (see `config.yaml` → `wiki.sections`). The owner
+picked this shape on the app's Setup page (Wiki shape). Each item of a kind
+gets its own page in that kind's folder:
+
+{{WIKI_SECTION_LIST}}
+
+A new page goes in the folder whose note fits it best. Do not create a folder
+that is not in this list; when nothing fits, say so in the ingest report. Plus:
 
 - `wiki/index.md` — catalog of every page, grouped by section.
 - `wiki/log.md` — append-only record of every ingest / sync / lint.
@@ -101,7 +105,7 @@ solutions-architecture function — swap it for yours. Plus:
   them, or shared a thread) — not mere mention.
 - `concepts/` — a term referenced **≥3×** across raw with no explainer yet.
 - `workflows/` — a how-to reconstructable from raw that saves future-you time.
-- `customers/` — an incident OR ≥3 substantive mentions; else tag-only.
+- `customers/` (when the shape has it) — an incident OR ≥3 substantive mentions; else tag-only.
 
 **Tag namespaces (locked):** only the namespaces in `{{TAG_NAMESPACES}}`
 (`config.yaml`). Don't invent new ones; expand only when a memory truly doesn't

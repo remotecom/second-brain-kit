@@ -110,7 +110,11 @@ async function runMorning(run, ctx) {
   const delta = await deltaWalk(vault);
   const n = delta.files.length;
   let ingest = null;
-  if (n >= s.ingestMinFiles || (n > 0 && days >= s.ingestMaxDays)) {
+  // The first ingest waits until the owner picks a wiki shape (Setup page).
+  if (require('./wiki-shape').needsShape(vault)) {
+    logLine(run, `ingest waits for your wiki shape: ${n} new raw file(s) are ready. Pick a shape on Setup → Wiki shape.`);
+    steps.push('ingest waits for wiki shape');
+  } else if (n >= s.ingestMinFiles || (n > 0 && days >= s.ingestMaxDays)) {
     logLine(run, `ingest due: ${n} new raw file(s), ${days.toFixed(1)} day(s) since the last ingest`);
     ingest = await step('ingest', {});
   } else {

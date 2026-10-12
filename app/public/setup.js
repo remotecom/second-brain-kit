@@ -1,4 +1,4 @@
-// The Setup page: seven steps, top to bottom. Each probe presses connector
+// The Setup page: eight steps, top to bottom. Each probe presses connector
 // buttons through the app (the code reads the answers); each Save writes
 // config.yaml and keeps your comments. Mounted once per visit, so the board's
 // polling never resets what you are typing.
@@ -12,11 +12,12 @@
   const esc = (s) => ctx.esc(s);
   const STEP = {
     connectors: 'Connectors', identity: 'You', scope: 'Linear scope', privacy: 'Privacy',
-    schedule: 'Schedule', obsidian: 'Obsidian', 'first-run': 'First run',
+    schedule: 'Schedule', obsidian: 'Obsidian', 'first-run': 'First run', 'wiki-shape': 'Wiki shape',
   };
   const SRC = { slack: 'Slack', linear: 'Linear', notion: 'Notion', gcal: 'Google Calendar', gdrive: 'Google Drive' };
 
-  async function load() { view = await ctx.api('/api/setup'); paint(); }
+  let shape = null;  // GET /api/setup/shape
+  async function load() { [view, shape] = await Promise.all([ctx.api('/api/setup'), ctx.api('/api/setup/shape')]); paint(); }
 
   async function probe(step) {
     busy[step] = true; paint();
@@ -101,7 +102,7 @@
       <div class="n">Now: ${cur.initiative ? `initiative <code>${esc(cur.initiative)}</code>` : cur.team ? `team <code>${esc(cur.team)}</code>` : 'not set'}</div>
       <div class="row"><button class="small ghost" data-probe="scope">${pr ? 'Load again' : 'Load from Linear'}</button>
       <button class="small" data-save="scope" ${p.id ? '' : 'disabled'}>Save</button>
-      <button class="small ghost" data-rescope>Run Linear rescope</button></div>
+      <button class="small ghost" data-rescope ${busy.rescope ? 'disabled' : ''}>${busy.rescope ? 'Rescope started: see the Log, then Today' : 'Run Linear rescope'}</button></div>
       <div class="n">After you change the scope, run the rescope. The first one asks you to confirm the project count.</div>`;
   }
 
@@ -111,10 +112,11 @@
       <div class="row"><button class="small" data-probe="privacy">Show the preview</button></div>`;
     const p = picks.privacy || { cal: Object.fromEntries(pr.calendars.map((c) => [c.id, c.on])), fol: Object.fromEntries(pr.folders.map((f) => [f.id, f.on])) };
     picks.privacy = p;
-    const group = (title, key, items) => `<div class="grp"><div class="grp-h">${title} <button class="tiny ghost" data-all="${key}">All</button><button class="tiny ghost" data-none="${key}">None</button></div>
-      ${items.map((x) => `<label class="opt line"><input type="checkbox" data-pv="${key}" value="${esc(x.id)}" ${p[key][x.id] ? 'checked' : ''} ${x.locked ? 'disabled' : ''}> ${esc(x.name)}${x.locked ? ' <span class="muted">(always excluded)</span>' : ''}</label>`).join('') || '<div class="muted">none</div>'}</div>`;
+    const miss = pr.missing || [];
+    const group = (title, key, items, lost) => `<div class="grp"><div class="grp-h">${title} <button class="tiny ghost" data-all="${key}">All</button><button class="tiny ghost" data-none="${key}">None</button></div>
+      ${lost ? '<div class="warn-t">The connector did not answer, so this list is not known yet. Press Refresh. Saving keeps what config.yaml has now.</div>' : items.map((x) => `<label class="opt line"><input type="checkbox" data-pv="${key}" value="${esc(x.id)}" ${p[key][x.id] ? 'checked' : ''} ${x.locked ? 'disabled' : ''}> ${esc(x.name)}${x.locked ? ' <span class="muted">(always excluded)</span>' : ''}</label>`).join('') || '<div class="muted">none</div>'}</div>`;
     return `<p>Ticked = synced. Start with your own work calendar only: other calendars can be personal or a colleague's. Drive syncs files you own or edited, except in unticked folders.</p>
-      ${group('Calendars', 'cal', pr.calendars)}${group('Top-level Drive folders', 'fol', pr.folders)}
+      ${group('Calendars', 'cal', pr.calendars, miss.includes('calendars'))}${group('Top-level Drive folders', 'fol', pr.folders, miss.includes('drive folders'))}
       <div class="row"><button class="small ghost" data-probe="privacy">Refresh</button><button class="small" data-save="privacy">Save</button></div>`;
   }
 
@@ -123,7 +125,7 @@
     const p = picks.schedule || { morning_at: c.schedule.morning_at, usage_share: c.usage_share, enabled: c.schedule.enabled };
     picks.schedule = p;
     const share = { light: 'about 25% of a day', normal: 'about 40%', heavy: 'about 60%' };
-    return `<p>The Morning run syncs everything, folds it into the wiki and checks it, once a day. It starts again after a restart, because setup added a login item.</p>
+    return `<p>The Morning run syncs everything, folds it into the wiki and checks it, once a day. It starts again after a restart when the app runs at login (setup adds that).</p>
       <div class="form"><label>Morning run at <input type="time" data-sch="morning_at" value="${esc(p.morning_at)}"></label>
       <label class="opt"><input type="checkbox" data-sch="enabled" ${p.enabled ? 'checked' : ''}> Run every morning</label></div>
       <div class="n">Usage share: the bots use your claude.ai plan and share its limits with you. No per-call charge.</div>
@@ -143,20 +145,54 @@
     if (view.firstRunStarted) return `<p>The first run has started. From now on the Morning run starts by itself at ${esc(c.schedule.morning_at)}.</p>`;
     const p = picks['first-run'] || { days: c.bootstrap_days || 7 };
     picks['first-run'] = p;
-    return `<p>The first run back-fills history once, then each day takes only what is new. A longer window takes longer and uses more of your plan.</p>
-      <div class="row">${[7, 14, 30].map((d) => `<label class="opt"><input type="radio" name="bd" value="${d}" ${Number(p.days) === d ? 'checked' : ''} data-bd> ${d} days</label>`).join('')}</div>
+    return `<p>The first run syncs your sources and back-fills history once; then each day takes only what is new. A longer window takes longer and uses more of your plan. 3 days is a quick trial. The first ingest waits for your wiki shape (the next step), so the shape can be suggested from this data.</p>
+      <div class="row">${[3, 7, 14, 30].map((d) => `<label class="opt"><input type="radio" name="bd" value="${d}" ${Number(p.days) === d ? 'checked' : ''} data-bd> ${d} days</label>`).join('')}</div>
       <div class="row"><button class="small" data-first>Start the first run</button></div>
       <div class="n">It runs in the background. Follow it in the Log, and find the result on Today.</div>`;
   }
 
-  const BODY = { connectors, identity, scope, privacy, schedule, obsidian, 'first-run': firstRun };
+  // --- wiki shape: the sections the wiki is built around ---
+  function wikiShape() {
+    if (!shape) return '<div class="muted">Loading…</div>';
+    const d = picks.shape || (shape.draft ? { ...shape.draft, sections: shape.draft.sections.map((x) => ({ ...x })), tags: [...shape.draft.tags] } : null);
+    picks.shape = d;
+    const role = picks.role ?? shape.role ?? '';
+    const applied = shape.appliedAt || shape.firstIngestDone;
+    const head = `<p>The wiki gets one folder per kind of thing you work with (accounts, services, partners…), and one page per item. Pick the kinds before the first ingest. You can start from a preset, let Claude suggest them from your synced data, or talk it through. You can add sections later.</p>
+      <div class="form"><label>What do you do? <input data-role value="${esc(role)}" placeholder="e.g. solutions engineer for partner integrations"></label></div>
+      <div class="row"><span class="muted">Start from:</span> ${Object.entries(shape.presets).map(([id, p]) => `<button class="small ghost" data-preset="${esc(id)}" title="${esc(p.sections.join(', '))}">${esc(p.label)}</button>`).join('')}</div>
+      <div class="row"><button class="small" data-suggest ${busy.suggest ? 'disabled' : ''}>${busy.suggest ? 'Reading your data…' : 'Suggest from my data'}</button>
+      <button class="small ghost" data-shape-session title="A Claude Code session that reads a sample of your data and agrees the sections with you">Talk it through</button>
+      <span class="muted">Suggest reads names and titles only (Sonnet, a few cents).</span></div>`;
+    const cur = applied ? `<div class="n">Now: ${shape.current.sections.map((x) => `<code>${esc(x.name)}</code>${shape.counts[x.name] ? ` <span class="muted">${shape.counts[x.name]}</span>` : ''}`).join(' ')}</div>` : '';
+    if (!d) return head + cur;
+    const rows = d.sections.map((x, i) => `<div class="shape-row"><input data-sn="${i}" value="${esc(x.name)}" placeholder="folder"><input data-snote="${i}" value="${esc(x.note)}" placeholder="what goes in it"><button class="tiny ghost" data-sdel="${i}" title="Remove" ${shape.counts[x.name] ? 'disabled' : ''}>✕</button>${x.why ? `<div class="muted why">${esc(x.why)}</div>` : ''}</div>`).join('');
+    return `${head}${cur}
+      <div class="grp"><div class="grp-h">Draft${d.from ? ` <span class="muted">(${esc(d.from)})</span>` : ''}</div>${d.summary ? `<div class="n">${esc(d.summary)}</div>` : ''}
+      ${rows}<div class="row"><button class="tiny ghost" data-sadd>+ Add section</button></div>
+      <label class="form">Tag namespaces <input data-stags value="${esc(d.tags.join(', '))}"></label></div>
+      <div class="row"><button class="small" data-shape-apply>${shape.needsShape && view.firstRunStarted ? 'Use this shape and start the first ingest' : 'Use this shape'}</button></div>`;
+  }
+
+  async function shapeCall(url, body) {
+    const r = await ctx.api(url, { method: 'POST', body: JSON.stringify(body) });
+    if (r.error) { alert(r.error); return null; }
+    if (r.view) shape = r.view;
+    picks.shape = null;
+    return r;
+  }
+
+  const BODY = { connectors, identity, scope, privacy, schedule, obsidian, 'first-run': firstRun, 'wiki-shape': wikiShape };
+
+  // A vault that ingested before this step existed already has its shape.
+  const isDone = (s) => view.done[s] || (s === 'first-run' && view.firstRunStarted) || (s === 'wiki-shape' && shape && !shape.needsShape);
 
   function paint() {
     if (!root || !view) return;
     const keepY = root.scrollTop;
-    root.innerHTML = `<h1>Setup</h1><div class="sub">Seven steps. Each one saves on its own; come back any time.</div>
-      ${view.steps.map((s, i) => `<div class="card step ${view.done[s] || (s === 'first-run' && view.firstRunStarted) ? 'done' : ''}">
-        <div class="k">${i + 1}. ${STEP[s]}${view.done[s] || (s === 'first-run' && view.firstRunStarted) ? ' <span class="pill ok">done</span>' : ''}${busy[s] ? ' <span class="pill running">working…</span>' : ''}</div>
+    root.innerHTML = `<h1>Setup</h1><div class="sub">Eight steps. Each one saves on its own; come back any time.</div>
+      ${view.steps.map((s, i) => `<div class="card step ${isDone(s) ? 'done' : ''}">
+        <div class="k">${i + 1}. ${STEP[s]}${isDone(s) ? ' <span class="pill ok">done</span>' : ''}${busy[s] ? ' <span class="pill running">working…</span>' : ''}</div>
         ${BODY[s]()}</div>`).join('')}`;
     root.scrollTop = keepY;
   }
@@ -176,7 +212,9 @@
     if (step === 'scope') return picks.scope.type === 'team' ? { team: picks.scope.id } : { initiative: picks.scope.id };
     if (step === 'privacy') {
       const p = picks.privacy;
-      return { calendars: Object.keys(p.cal).filter((k) => p.cal[k]), excludeFolders: Object.keys(p.fol).filter((k) => !p.fol[k]) };
+      const miss = (view.probes.privacy || {}).missing || [];
+      // A list that never came back saves nothing: config.yaml keeps its value.
+      return { ...(miss.includes('calendars') ? {} : { calendars: Object.keys(p.cal).filter((k) => p.cal[k]) }), ...(miss.includes('drive folders') ? {} : { excludeFolders: Object.keys(p.fol).filter((k) => !p.fol[k]) }) };
     }
     if (step === 'schedule') return picks.schedule;
     return {};
@@ -189,7 +227,27 @@
     if (d.save) return save(d.save, collectStep(d.save));
     if (t.closest('[data-scope]')) { picks.scope.id = t.closest('[data-scope]').dataset.scope; return paint(); }
     if (d.all || d.none) { const key = d.all || d.none; const pr = view.probes.privacy; const items = key === 'cal' ? pr.calendars : pr.folders; for (const x of items) if (!x.locked) picks.privacy[key][x.id] = !!d.all; return paint(); }
-    if ('rescope' in d) { return ctx.api('/api/brain/bots/rescope/run', { method: 'POST', body: '{}' }).then((r) => { if (r.error) alert(r.error); ctx.onChange(true); }); }
+    if ('rescope' in d) { busy.rescope = true; paint(); return ctx.api('/api/brain/bots/rescope/run', { method: 'POST', body: '{}' }).then((r) => { if (r.error) { alert(r.error); busy.rescope = false; paint(); } ctx.onChange(true); }); }
+    if (d.preset) return shapeCall('/api/setup/shape/draft', { preset: d.preset, role: picks.role ?? shape.role }).then(paint);
+    if ('suggest' in d) { busy.suggest = true; busy['wiki-shape'] = true; paint(); return shapeCall('/api/setup/shape/suggest', { role: picks.role ?? shape.role }).then(() => { busy.suggest = false; busy['wiki-shape'] = false; paint(); }); }
+    if ('shapeSession' in d) {
+      // Save the edits first, so the session starts from what is on screen.
+      const go = () => window.SessionPanel && window.SessionPanel.start('shape', {});
+      return picks.shape ? shapeCall('/api/setup/shape/draft', { shape: picks.shape, role: picks.role ?? shape.role }).then((r) => { paint(); if (r) go(); }) : go();
+    }
+    if ('sadd' in d) { picks.shape.sections.push({ name: '', note: '' }); return paint(); }
+    if (d.sdel) { picks.shape.sections.splice(Number(d.sdel), 1); return paint(); }
+    if ('shapeApply' in d) {
+      const start = shape.needsShape && view.firstRunStarted;
+      const names = picks.shape.sections.map((x) => x.name).join(', ');
+      if (!confirm(`Use these sections: ${names}?${start ? ' The first ingest starts now.' : ''}`)) return;
+      return shapeCall('/api/setup/shape/apply', { shape: picks.shape }).then(async (r) => {
+        if (!r) return paint();
+        view = await ctx.api('/api/setup');
+        if (start) { const x = await ctx.api('/api/brain/bots/ingest/run', { method: 'POST', body: '{}' }); if (x.error) alert(x.error); }
+        paint(); ctx.onChange(true);
+      });
+    }
     if ('graph' in d) { return ctx.api('/api/setup/obsidian', { method: 'POST', body: '{}' }).then((r) => { if (!r.written) alert(r.why); else alert(`Applied ${r.groups} color group(s); kept ${r.kept} of yours.`); view = r.view; paint(); }); }
     if ('first' in d) {
       const days = Number(picks['first-run'].days);
@@ -207,6 +265,10 @@
     if (d.sch) { picks.schedule[d.sch] = t.type === 'checkbox' ? t.checked : t.value; return; }
     if ('share' in d) { picks.schedule.usage_share = t.value; return; }
     if ('bd' in d) { picks['first-run'].days = Number(t.value); return; }
+    if ('role' in d) { picks.role = t.value; return; }
+    if (d.sn !== undefined) { picks.shape.sections[Number(d.sn)].name = t.value.trim().toLowerCase(); return; }
+    if (d.snote !== undefined) { picks.shape.sections[Number(d.snote)].note = t.value; return; }
+    if ('stags' in d) { picks.shape.tags = t.value.split(',').map((x) => x.trim()).filter(Boolean); return; }
     if (d.f) { picks.identity = { ...(picks.identity || {}), [d.f]: t.value }; return; }
     if (d.conn) { picks.connectors = { ...(picks.connectors || {}), [d.conn]: t.value }; }
   }

@@ -188,7 +188,7 @@ function validate(vault) {
   for (const [k, v] of Object.entries(c.connectors || {})) {
     if (!/^mcp__[A-Za-z0-9_-]+$/.test(String(v || ''))) add('error', `connectors.${k}`, `connectors.${k} must look like mcp__claude_ai_Name (the part before the double underscore)`);
   }
-  if (![7, 14, 30].includes(c.bootstrap_days)) add('warn', 'bootstrap_days', 'bootstrap_days is usually 7, 14 or 30');
+  if (![3, 7, 14, 30].includes(c.bootstrap_days)) add('warn', 'bootstrap_days', 'bootstrap_days is usually 3, 7, 14 or 30');
   const sch = c.schedule;
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(sch.morning_at))) add('error', 'schedule.morning_at', 'schedule.morning_at must be HH:MM, e.g. "06:00"');
   for (const k of ['ingest_min_files', 'ingest_max_days']) if (!(Number.isInteger(sch[k]) && sch[k] >= 1)) add('error', `schedule.${k}`, `schedule.${k} must be a whole number of 1 or more`);

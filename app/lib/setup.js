@@ -13,7 +13,7 @@ const { pressButtons, collect } = require('./buttons');
 const { getConfig, readOwner, writeValues } = require('./config');
 const { tool, HEALTH_CALLS, REQUIRED, judgeResult, NAMES } = require('./connectors');
 
-const STEPS = ['connectors', 'identity', 'scope', 'privacy', 'schedule', 'obsidian', 'first-run'];
+const STEPS = ['connectors', 'identity', 'scope', 'privacy', 'schedule', 'obsidian', 'first-run', 'wiki-shape'];
 const SOURCES = Object.keys(REQUIRED);
 
 const stateFile = (vault) => path.join(vault, '.bot', 'state', 'setup.json');
@@ -121,7 +121,7 @@ async function probeScope(ctx, run) {
 async function probePrivacy(ctx, run) {
   const { vault } = ctx;
   const cfg = getConfig(vault);
-  const cal = await collect(ctx, run, tool(vault, 'gcal', 'list_calendars'), [{ args: {} }], { pageOf: (j) => (Array.isArray(j.calendars) ? { items: j.calendars, next: null } : null), label: 'calendars', maxRounds: 2 });
+  const cal = await collect(ctx, run, tool(vault, 'gcal', 'list_calendars'), [{ args: { pageSize: 250 } }], { pageOf: (j) => (Array.isArray(j.calendars) ? { items: j.calendars, next: null } : null), label: 'calendars', maxRounds: 2 });
   const q = "parentId = 'root' and mimeType = 'application/vnd.google-apps.folder'";
   const drv = await collect(ctx, run, tool(vault, 'gdrive', 'search_files'), [{ args: { query: q, pageSize: 100 } }], { pageOf: (j) => (Array.isArray(j.files) ? { items: j.files, next: j.nextPageToken || null } : null), cursorKey: 'pageToken', label: 'drive folders', maxRounds: 4 });
   const synced = new Set(cfg.sources.gcal.calendars.map(String));
@@ -130,6 +130,8 @@ async function probePrivacy(ctx, run) {
   const res = {
     calendars: [...cal.results.values()].flat().map((c) => ({ id: c.id, name: c.summary || c.id, on: synced.size ? synced.has(c.id) : c.id === cfg.owner.email })),
     folders: [...drv.results.values()].flat().map((f) => ({ id: f.id, name: f.name || f.title || f.id, on: !excluded.has(f.id) && !titlesOut.has(f.name || f.title), locked: titlesOut.has(f.name || f.title) })),
+    // A list that never came back is not an empty list: say so, never "none".
+    missing: [cal.unfinished.length && 'calendars', drv.unfinished.length && 'drive folders'].filter(Boolean),
   };
   writeState(vault, { probes: { ...readState(vault).probes, privacy: { at: new Date().toISOString(), ...res } } });
   return { result: res, cost: cal.cost + drv.cost };
@@ -162,8 +164,10 @@ function save(vault, step, v = {}) {
     if (v.morning_at !== undefined) { if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(v.morning_at)) throw new Error('morning time must be HH:MM'); set['schedule.morning_at'] = v.morning_at; }
     if (v.usage_share !== undefined) { if (!['light', 'normal', 'heavy'].includes(v.usage_share)) throw new Error('usage share must be light, normal or heavy'); set.usage_share = v.usage_share; }
     if (typeof v.enabled === 'boolean') set['schedule.enabled'] = v.enabled;
+  } else if (step === 'wiki-shape') {
+    // Written by wiki-shape.apply; saving here only marks the step done.
   } else if (step === 'first-run') {
-    if (v.bootstrap_days !== undefined) { if (![7, 14, 30].includes(Number(v.bootstrap_days))) throw new Error('first-run window is 7, 14 or 30 days'); set.bootstrap_days = Number(v.bootstrap_days); }
+    if (v.bootstrap_days !== undefined) { if (![3, 7, 14, 30].includes(Number(v.bootstrap_days))) throw new Error('first-run window is 3, 7, 14 or 30 days'); set.bootstrap_days = Number(v.bootstrap_days); }
   } else throw new Error(`unknown step ${step}`);
   if (Object.keys(set).length) writeValues(vault, set);
   if (step !== 'first-run') markDone(vault, step);

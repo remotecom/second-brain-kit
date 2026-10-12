@@ -91,6 +91,31 @@ test('Look into this: a warn run opens a findings session with the next step as 
   } finally { await app.stop(); }
 });
 
+test('wiki shape: a new vault holds the first ingest, the shape session applies a preset draft', { skip, timeout: 60000 }, async () => {
+  const w = world();
+  const app = await server(w);
+  try {
+    const v = (await app.api('/api/setup/shape'));
+    assert.equal(v.needsShape, true);
+    // Ingest refuses to start before a shape (a warn run, not an error).
+    await app.api('/api/brain/bots/ingest/run', {});
+    let last; for (let i = 0; i < 40; i++) { last = (await app.api('/api/brain/bots')).bots.find((b) => b.id === 'ingest').last; if (last && last.endedAt) break; await wait(100); }
+    assert.equal(last.status, 'warn');
+    assert.match(last.summary, /wiki shape/);
+    assert.match((await app.api('/api/brain/bots')).bots.find((b) => b.id === 'ingest').todo.text, /no shape yet/);
+    // A preset becomes the draft; the session's outcome applies it.
+    assert.equal((await app.api('/api/setup/shape/draft', { preset: 'engineering' })).draft.from, 'preset:engineering');
+    const s = (await app.api('/api/sessions', { kind: 'shape', item: {} })).session;
+    assert.equal(s.title, 'Shape your wiki');
+    assert.deepEqual(s.outcomes.map((o) => o.label), ['Use this shape']);
+    assert.ok(fs.existsSync(path.join(w.vault, '.bot', 'state', 'wiki-shape-sample.md')));
+    const r = await app.api(`/api/sessions/${s.id}/outcome`, { label: 'Use this shape' });
+    assert.match(r.summary, /services, runbooks/);
+    assert.equal((await app.api('/api/setup/shape')).needsShape, false);
+    assert.ok(fs.statSync(path.join(w.vault, 'wiki', 'runbooks')).isDirectory());
+  } finally { await app.stop(); }
+});
+
 test('after an app restart a session is asleep and opening it resumes the same id', { skip, timeout: 60000 }, async () => {
   const w = world();
   let app = await server(w);

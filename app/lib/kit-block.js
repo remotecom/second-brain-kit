@@ -51,6 +51,9 @@ function values(vault) {
     SLACK_WINDOW: w('slack'), LINEAR_WINDOW: w('linear'), NOTION_WINDOW: w('notion'),
     GCAL_WINDOW: w('gcal'), GDRIVE_WINDOW: w('gdrive'), GMAIL_WINDOW: w('gmail'),
     WIKI_SECTIONS: c.wiki.sections.join(', '),
+    // One line per section with its note (config.yaml wiki.section_notes), so
+    // ingest knows what each folder is for, not only its name.
+    WIKI_SECTION_LIST: c.wiki.sections.map((s) => { const n = ((c.wiki.section_notes || {})[s] || '').trim(); return `- \`${s}/\`${n ? `: ${n}` : ''}`; }).join('\n'),
     TAG_NAMESPACES: c.tags.namespaces.join(', '),
     PROMOTION_MIN_SOURCES: String(c.wiki.promotion.default_min_sources),
     PERSON_EXTERNAL_MIN: String(c.wiki.promotion.person_external_min),

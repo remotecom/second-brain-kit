@@ -108,6 +108,7 @@ a.nav-item { text-decoration: none; color: var(--muted); font-size: 13px; }
 .card.step.done { border-color: #23402b; }
 .card.step p { margin: 6px 0 10px; color: #cfcfcf; max-width: 760px; }
 .card.step p.warn { color: var(--warn); }
+.warn-t { color: var(--warn); font-size: 13px; padding: 4px 0; }
 .card .row a.small { font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); text-decoration: none; }
 table.t { border-collapse: collapse; width: 100%; max-width: 820px; margin: 4px 0 8px; font-size: 13px; }
 table.t th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--line); }
@@ -179,3 +180,6 @@ body.sp-dragging #sp-term { pointer-events: none; }
 #sp-tab { position: fixed; right: 0; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; border-radius: 6px 0 0 6px; padding: 12px 6px; font-size: 12px; max-height: 60vh; overflow: hidden; z-index: 20; }
 #sp-tab[hidden] { display: none; }
 .card.look .row { margin-top: 6px; }
+.shape-row { display: grid; grid-template-columns: 160px 1fr auto; gap: 6px; align-items: center; margin: 4px 0; }
+.shape-row input { width: 100%; }
+.shape-row .why { grid-column: 1 / -1; font-size: 12px; margin: -2px 0 4px; }

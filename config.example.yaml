@@ -117,7 +117,7 @@ sources:
     strip_quoted_replies: true      # else a 20-message thread stores itself 20x
     include_attachments: false
 
-# The first sync of each source back-fills this many days once (7, 14 or 30).
+# The first sync of each source back-fills this many days once (3, 7, 14 or 30; 3 is a quick trial).
 # After that the rolling window takes over.
 bootstrap_days: 7
 
@@ -176,6 +176,22 @@ wiki:
     - concepts      # glossary of terms you re-explain
     - workflows     # how-to recipes reconstructed from tribal knowledge
     - customers     # end customers with substantive context
+
+  # What goes in each section, one short line. Ingest reads these (they are
+  # written into the kit block of the vault's CLAUDE.md). The Setup page's
+  # Wiki shape step writes this list and wiki.sections together.
+  section_notes:
+    partners: external companies you integrate or partner with
+    systems: your own company's systems and components
+    integrators: third-party tools that connect the systems
+    problems: problems that keep coming back
+    people: named individuals you work with
+    incidents: postmortems and outages
+    initiatives: internal projects and efforts
+    principles: your rules for how you work
+    concepts: "terms you keep explaining: a glossary"
+    workflows: how-to recipes rebuilt from what you did
+    customers: end customers with real context
 
   # Promotion thresholds: when a raw mention earns its own wiki page.
   promotion:
