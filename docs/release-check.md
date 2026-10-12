@@ -6,6 +6,21 @@ none of the author's files. Put the results in the PR description.
 
 Time: about 45 minutes, most of it waiting for the first run.
 
+## 0. The scripted part (every update)
+
+`bash tests/fresh-install.sh --from-vault <your vault>` does sections 2 to 4
+on your own account, in a throwaway folder on port 19310: clone, setup, a
+3-day first run, a wiki shape (Sonnet suggests one from the synced names, or
+`--shape <preset>`), the first ingest and Verify, then checks the wiki (every
+page in a section, sources listed and not doubled, no dead or `.md` links,
+every page in the index). It never touches the live app or its login item.
+It costs one short first run (about $3-4 of plan usage) and writes
+`report.md`. Run it before every release; paste the report in the PR.
+
+The clean-account sections below still matter before teammate #2: the script
+uses your Claude login and your connected connectors, so it cannot see what a
+newcomer hits first.
+
 ## 1. A clean macOS account
 
 1. System Settings → Users & Groups → add a Standard user. Log in as that user.
@@ -42,6 +57,7 @@ Open http://localhost:19300 → Setup. For each step, write down what happened.
       folders are locked out
 - [ ] Schedule: set a morning time; pick a usage share
 - [ ] Obsidian: with Obsidian closed, Apply writes `.obsidian/graph.json`
+- [ ] Wiki shape comes after the first run: Suggest from my data, edit, Use this shape
 - [ ] First run: 7 days; Start
 
 ## 4. The first run
