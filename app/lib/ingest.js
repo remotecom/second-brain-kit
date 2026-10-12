@@ -75,6 +75,10 @@ const fmField = (fm, key) => {
 
 // Append sources (keeping every existing entry) and set updated:. Handles both
 // the YAML-list and the inline-array form; an inline array is rewritten as a list.
+// [[notion/pages/x.md]] is a dead link in Obsidian and to lint; the target is
+// [[notion/pages/x]]. Mechanical, so code fixes what the model wrote.
+const unMd = (text) => text.replace(/\[\[([^\]|#\n]+?)\.md((?:[#|][^\]\n]*)?)\]\]/g, '[[$1$2]]');
+
 function stampFrontmatter(text, sources, date) {
   const { fm, body } = splitFrontmatter(text);
   if (fm === null) return text;
@@ -468,7 +472,7 @@ async function runPart(ctx, part, k, n) {
     }
     // Pass: write, then stamp provenance mechanically from the manifest.
     for (const [rel, text] of pages) {
-      const stamped = check.claims.has(rel) ? stampFrontmatter(text, [...check.claims.get(rel)], date) : text;
+      const stamped = unMd(check.claims.has(rel) ? stampFrontmatter(text, [...check.claims.get(rel)], date) : text);
       fs.mkdirSync(path.dirname(path.join(vault, rel)), { recursive: true });
       fs.writeFileSync(path.join(vault, rel), stamped);
     }
@@ -657,4 +661,4 @@ async function runIngest(run, { claudeBin, vault, env, logLine, finish, latestFo
     { deltasLine: dw.deltasLine, pages: pagesAll, contradictions, balance, skipped }, cost);
 }
 
-module.exports = { deltaWalk, splitFrontmatter, fmField, runIngest, applyBlocks, parseBlocks, stampFrontmatter, entriesOf, entryKey, runnerSkip, linearLinkOnly, changedOnly, diffEligible };
+module.exports = { unMd, deltaWalk, splitFrontmatter, fmField, runIngest, applyBlocks, parseBlocks, stampFrontmatter, entriesOf, entryKey, runnerSkip, linearLinkOnly, changedOnly, diffEligible };

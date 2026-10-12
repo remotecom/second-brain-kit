@@ -233,3 +233,8 @@ test('stampFrontmatter: a source with and without .md is one entry; old pairs co
   assert.deepEqual(list, ['slack/2026-10-12', 'linear/issues/ENG-1.md', 'gcal/2026-10-12.md']);
   assert.match(out, /^# X$/m);
 });
+
+test('unMd: a .md wikilink is written without the suffix; others are untouched', () => {
+  assert.equal(I.unMd('see [[notion/pages/ab12.md]] and [[slack/2026-10-12.md|the day]] and [[wiki/a#H]]'), 'see [[notion/pages/ab12]] and [[slack/2026-10-12|the day]] and [[wiki/a#H]]');
+  assert.equal(I.unMd('sources:\n  - slack/2026-10-12.md\n'), 'sources:\n  - slack/2026-10-12.md\n');
+});
