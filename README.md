@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/remotecom/second-brain-kit/master/i
 ```
 
 It installs what is missing, skips what is there, and opens the app's Setup
-page. You do two things yourself: click **Install** in Apple's developer-tools
+page. It also offers to install Obsidian and adds your vault to it. You do two things yourself: click **Install** in Apple's developer-tools
 dialog (only if it appears), and log in with your claude.ai account when the
 browser opens. Homebrew, if it is not there, asks for your Mac password once.
 Run the command again at any time: an existing install only updates.

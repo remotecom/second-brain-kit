@@ -43,6 +43,9 @@ Check, and write down each result:
       Node, Claude Code), and each step it could not finish named its fix
 - [ ] the browser login worked, and `claude auth status` shows
       `"authMethod": "claude.ai"`
+- [ ] the installer offered Obsidian, installed it, and setup printed
+      "Obsidian knows this vault (added)"; Open in Obsidian (Setup page,
+      Obsidian step) opens the vault
 - [ ] the installer ended by opening the Setup page
 - [ ] run it a second time: every step says installed / up to date, and the
       vault does not change
