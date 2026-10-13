@@ -44,9 +44,13 @@ main() {
   local REPO="${SECOND_BRAIN_REPO:-https://github.com/remotecom/second-brain-kit.git}"
   local BRANCH="${SECOND_BRAIN_BRANCH:-master}"
 
-  # With `curl | bash`, stdin is the script. Prompts read the terminal instead.
-  local TTY=""
-  if { : </dev/tty; } 2>/dev/null; then TTY=/dev/tty; fi
+  # With `curl | bash`, stdin is the script. Prompts read the terminal instead:
+  # its real device (/dev/ttys003), not /dev/tty. Claude Code runs on Bun, and
+  # Bun stops with "EINVAL: invalid argument, kqueue" on /dev/tty.
+  local TTY="" t
+  t="$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')"
+  if [ -n "$t" ] && [ "$t" != "??" ] && [ -r "/dev/$t" ]; then TTY="/dev/$t"
+  elif { : </dev/tty; } 2>/dev/null; then TTY=/dev/tty; fi
 
   say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
   ok()   { printf '  ✓ %s\n' "$*"; }
@@ -119,6 +123,11 @@ main() {
     fi
   fi
   [ -n "$CLAUDE" ] && export PATH="$(dirname "$CLAUDE"):$PATH"
+  # So `claude` also works in a new Terminal window.
+  if [ "$CLAUDE" = "$HOME/.local/bin/claude" ] && ! grep -qs '.local/bin' "$HOME/.zshrc"; then
+    run sh -c "printf '\\n# Claude Code\\nexport PATH=\"\$HOME/.local/bin:\$PATH\"\\n' >> \"\$HOME/.zshrc\""
+    [ "$DRY" = 1 ] || ok "added ~/.local/bin to your PATH in ~/.zshrc (new Terminal windows)"
+  fi
 
   # --- 4. claude.ai login --------------------------------------------------------
   say "4/8 claude.ai login"
