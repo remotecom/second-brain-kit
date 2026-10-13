@@ -19,6 +19,8 @@ if ! lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   SECOND_BRAIN_PORT="$PORT" nohup "$NODE" "$APP_DIR/server.js" >>"$STATE/server.log" 2>&1 &
   for _ in $(seq 1 30); do lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1 && break; sleep 0.2; done
 fi
+# SECOND_BRAIN_NO_OPEN=1 starts the server only (the installer's test run).
+[ -z "${SECOND_BRAIN_NO_OPEN:-}" ] || { echo "Second Brain on http://localhost:$PORT (log: $STATE/server.log)"; exit 0; }
 # Its own window: a Chrome app window with its own profile if Chrome is there,
 # else the default browser.
 if [ -d "/Applications/Google Chrome.app" ] || [ -d "$HOME/Applications/Google Chrome.app" ]; then
