@@ -31,12 +31,21 @@ newcomer hits first.
 
 ## 2. Install
 
+Use the one-line installer, the way a teammate will:
+
 ```bash
-git clone https://github.com/remotecom/second-brain-kit.git ~/second-brain-kit
-~/second-brain-kit/app/bin/second-brain setup --vault ~/SecondBrain
+curl -fsSL https://raw.githubusercontent.com/remotecom/second-brain-kit/master/install.sh | bash
 ```
 
 Check, and write down each result:
+
+- [ ] the installer installed each missing item (developer tools, Homebrew,
+      Node, Claude Code), and each step it could not finish named its fix
+- [ ] the browser login worked, and `claude auth status` shows
+      `"authMethod": "claude.ai"`
+- [ ] the installer ended by opening the Setup page
+- [ ] run it a second time: every step says installed / up to date, and the
+      vault does not change
 
 - [ ] setup finished with no ✗ line, or each ✗ line named its fix
 - [ ] `~/Library/LaunchAgents/dev.secondbrain.app.plist` exists and starts the

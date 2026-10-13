@@ -2,12 +2,21 @@
 
 ## 0. What you need
 
+The one-line installer sets up all of this and then runs section 1 for you:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/remotecom/second-brain-kit/master/install.sh | bash
+```
+
+Skip to section 2 when it opens the Setup page. To install by hand, you need:
+
 - macOS, with Apple's developer tools (`xcode-select --install`: git and
   python3).
 - Node 18 or newer (`node --version`; install with `brew install node` or
   from https://nodejs.org).
 - [Claude Code](https://claude.com/claude-code)
-  (`npm install -g @anthropic-ai/claude-code`), logged in with your
+  (`curl -fsSL https://claude.ai/install.sh | bash`, or
+  `npm install -g @anthropic-ai/claude-code`), logged in with your
   **claude.ai account** (`claude auth status` shows `"authMethod": "claude.ai"`).
   An API key does not work: the bots reach your sources through claude.ai
   connectors, which exist only under a claude.ai login.
@@ -17,7 +26,7 @@ The bots use your claude.ai plan. There is no per-call charge, but they share
 your plan's usage limits with you. `usage_share` in `config.yaml` (light,
 normal or heavy) caps how much of a day they may use.
 
-## 1. Install
+## 1. Install (by hand; the installer does this step for you)
 
 ```bash
 git clone https://github.com/remotecom/second-brain-kit.git ~/second-brain-kit

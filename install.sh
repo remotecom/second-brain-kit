@@ -159,7 +159,7 @@ main() {
   say "Done. Two things are left, both on the Setup page:"
   printf '  1. In claude.ai → Settings → Connectors, connect Slack, Linear, Notion,\n     Google Calendar and Google Drive. Step 1 of the Setup page tests them.\n'
   printf '  2. Follow the steps to the first run and the wiki shape (about 15 minutes).\n'
-  printf '\n  The app: http://localhost:%s   Run it again any time: second-brain\n' "$PORT"
+  printf '\n  The app: http://localhost:%s\n  Open it again any time: %s\n' "$PORT" "$KIT/app/bin/second-brain"
 }
 
 main "$@"

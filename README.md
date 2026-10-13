@@ -35,17 +35,35 @@ Second Brain app. Your vault (synced sources, wiki, `config.yaml`) is a
 separate private folder that setup creates. It never enters this repo, and the
 code holds no partner, customer or personal names.
 
-## Before you start
+## Install (one command)
 
-You need these on your Mac. `second-brain setup` checks each one and prints
-the fix for anything missing, so you can also just run it and follow it.
+Open Terminal on your Mac and run:
 
-| What | How to get it | Setup checks it |
+```bash
+curl -fsSL https://raw.githubusercontent.com/remotecom/second-brain-kit/master/install.sh | bash
+```
+
+It installs what is missing, skips what is there, and opens the app's Setup
+page. You do two things yourself: click **Install** in Apple's developer-tools
+dialog (only if it appears), and log in with your claude.ai account when the
+browser opens. Homebrew, if it is not there, asks for your Mac password once.
+Run the command again at any time: an existing install only updates.
+
+Then connect your sources in claude.ai and finish the Setup page
+(**[SETUP.md](./SETUP.md)** walks through it).
+
+## What the installer sets up
+
+To install by hand instead, use the commands in this table, then the two
+commands under Quickstart. `second-brain setup` checks each item and prints the
+fix for anything missing.
+
+| What | How to get it by hand | Setup checks it |
 |---|---|---|
 | macOS | | yes |
 | Apple's developer tools (git, python3) | `xcode-select --install` in Terminal | python3, as a warning: the session panel needs it |
 | Node 18 or newer | `brew install node`, or the installer at [nodejs.org](https://nodejs.org) | yes |
-| [Claude Code](https://claude.com/claude-code) | `npm install -g @anthropic-ai/claude-code` | yes |
+| [Claude Code](https://claude.com/claude-code) | `curl -fsSL https://claude.ai/install.sh \| bash`, or `npm install -g @anthropic-ai/claude-code` | yes |
 | A claude.ai login in Claude Code (not an API key) | run `claude`, then log in with your claude.ai account | yes |
 | claude.ai connectors for the sources you want: Slack, Linear, Notion, Google Calendar, Google Drive | claude.ai → Settings → Connectors | on the Setup page (step 1) |
 | Optional: [Obsidian](https://obsidian.md) | for the graph view | |
@@ -54,7 +72,7 @@ The bots use your claude.ai plan. There is no per-call charge, but they share
 your plan's usage limits; `usage_share` in `config.yaml` caps their part.
 Gmail is not written yet.
 
-## Quickstart
+## Quickstart (by hand)
 
 ```bash
 git clone https://github.com/remotecom/second-brain-kit.git ~/second-brain-kit
