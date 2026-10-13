@@ -134,10 +134,12 @@
   }
 
   function obsidian() {
-    return `<p>Open the vault in Obsidian for the graph view. The kit sets the graph to show the wiki only, one color per section, with the index, the log and the raw sources hidden. Your own color groups stay.</p>
-      ${view.obsidianRunning ? '<p class="warn">Obsidian is open. Close it, then press Apply (it rewrites the file when it quits).</p>' : ''}
+    if (!view.obsidianInstalled) return `<p>Obsidian is optional. It shows the wiki as a graph. Install it from <a href="https://obsidian.md" target="_blank" rel="noopener">obsidian.md</a> (or run the installer again), then come back to this step.</p>`;
+    const vid = view.obsidianVaultId || view.vaultName;
+    return `<p>Open the vault in Obsidian for the graph view. Apply adds this vault to Obsidian and sets the graph to show the wiki only, one color per section, with the index, the log and the raw sources hidden. Your own color groups stay.</p>
+      ${view.obsidianRunning ? '<p class="warn">Obsidian is open. Close it, then press Apply (it rewrites its files when it quits).</p>' : ''}
       <div class="row"><button class="small" data-graph ${view.obsidianRunning ? 'disabled' : ''}>Apply graph colors</button>
-      <a class="small ghost" href="obsidian://open?vault=${encodeURIComponent(view.vaultName)}">Open in Obsidian</a></div>`;
+      ${view.obsidianVaultId || view.obsidianRunning ? `<a class="small ghost" href="obsidian://open?vault=${encodeURIComponent(vid)}">Open in Obsidian</a>` : ''}</div>`;
   }
 
   function firstRun() {

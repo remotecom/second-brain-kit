@@ -8,15 +8,18 @@
 #   2. Node 18 or newer, with Homebrew (Homebrew asks for your Mac password once).
 #   3. Claude Code (Anthropic's installer, into ~/.local/bin; no password).
 #   4. The claude.ai login: opens your browser; you log in.
-#   5. The kit: clones it, or pulls it when it is already there.
-#   6. second-brain setup: the vault, the login item and the checks.
-#   7. Opens the Setup page. Connect your sources there (step 1).
+#   5. Obsidian, for the graph view (optional; it asks first).
+#   6. The kit: clones it, or pulls it when it is already there.
+#   7. second-brain setup: the vault, the login item, the checks, and the
+#      vault added to Obsidian's vault list.
+#   8. Opens the Setup page. Connect your sources there (step 1).
 #
 # Options (environment variables):
 #   SECOND_BRAIN_DIR     the kit folder     (default ~/second-brain-kit)
 #   SECOND_BRAIN_VAULT   the vault folder   (default ~/SecondBrain)
 #   SECOND_BRAIN_REPO    the git URL        (default the public repo)
 #   SECOND_BRAIN_BRANCH  the branch         (default master)
+#   SECOND_BRAIN_OBSIDIAN  yes or no: install Obsidian without asking
 # An existing install keeps its own kit and vault (from ~/.second-brain/settings.json),
 # so running this again only updates; it never moves you to a new vault.
 #
@@ -55,7 +58,7 @@ main() {
   [ "$(uname -s)" = Darwin ] || die "Second Brain runs on macOS only."
 
   # --- 1. Apple's developer tools --------------------------------------------
-  say "1/7 Apple's developer tools (git, python3)"
+  say "1/8 Apple's developer tools (git, python3)"
   if xcode-select -p >/dev/null 2>&1; then ok "installed"
   else
     todo "Apple's install dialog opens now. Click Install, then wait (about 5 minutes)."
@@ -71,7 +74,7 @@ main() {
   fi
 
   # --- 2. Node 18+ -------------------------------------------------------------
-  say "2/7 Node 18 or newer"
+  say "2/8 Node 18 or newer"
   local NODE=""
   node_ok() { [ -x "$1" ] && [ "$("$1" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -ge 18 ]; }
   for n in "$(command -v node || true)" /opt/homebrew/bin/node /usr/local/bin/node "$HOME/.volta/bin/node"; do
@@ -100,7 +103,7 @@ main() {
   [ -n "$NODE" ] && export PATH="$(dirname "$NODE"):$PATH"
 
   # --- 3. Claude Code ----------------------------------------------------------
-  say "3/7 Claude Code"
+  say "3/8 Claude Code"
   local CLAUDE=""
   for c in "$HOME/.local/bin/claude" /opt/homebrew/bin/claude /usr/local/bin/claude "$(command -v claude || true)"; do
     [ -n "$c" ] && [ -x "$c" ] && { CLAUDE="$c"; break; }
@@ -118,7 +121,7 @@ main() {
   [ -n "$CLAUDE" ] && export PATH="$(dirname "$CLAUDE"):$PATH"
 
   # --- 4. claude.ai login --------------------------------------------------------
-  say "4/7 claude.ai login"
+  say "4/8 claude.ai login"
   auth_field() { env -u ANTHROPIC_API_KEY "$CLAUDE" auth status 2>/dev/null | "$NODE" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(j[process.argv[1]]===undefined?"":j[process.argv[1]])}catch{console.log("")}})' "$1"; }
   if [ -n "$CLAUDE" ] && [ -n "$NODE" ] && [ "$(auth_field loggedIn)" = true ] && [ "$(auth_field authMethod)" = claude.ai ]; then
     ok "logged in$(e=$(auth_field email); [ -n "$e" ] && echo " as $e")"
@@ -132,8 +135,25 @@ main() {
     fi
   fi
 
-  # --- 5. The kit ------------------------------------------------------------------
-  say "5/7 The kit ($KIT)"
+  # --- 5. Obsidian (optional) -------------------------------------------------------
+  say "5/8 Obsidian (optional: the graph view)"
+  if [ -d /Applications/Obsidian.app ] || [ -d "$HOME/Applications/Obsidian.app" ]; then ok "installed"
+  else
+    local want="${SECOND_BRAIN_OBSIDIAN:-}"
+    if [ -z "$want" ] && [ -n "$TTY" ] && [ "$DRY" = 0 ]; then
+      printf '  Install Obsidian? [Y/n] '; read -r want <"$TTY" || want=""
+      case "$want" in [nN]*) want=no ;; *) want=yes ;; esac
+    fi
+    if [ "$want" = yes ]; then
+      local BREW=""
+      for b in "$(command -v brew || true)" /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -n "$b" ] && [ -x "$b" ] && { BREW="$b"; break; }; done
+      if [ -n "$BREW" ]; then run "$BREW" install --cask obsidian; [ "$DRY" = 1 ] || ok "installed"
+      else todo "no Homebrew: download Obsidian from https://obsidian.md, then run this installer again to add the vault to it"; fi
+    else todo "skipped. Install it later from https://obsidian.md and run this installer again."; fi
+  fi
+
+  # --- 6. The kit ------------------------------------------------------------------
+  say "6/8 The kit ($KIT)"
   if [ -d "$KIT/.git" ]; then
     run git -C "$KIT" pull --ff-only --quiet
     [ "$DRY" = 1 ] || ok "up to date"
@@ -144,14 +164,14 @@ main() {
     [ "$DRY" = 1 ] || ok "cloned"
   fi
 
-  # --- 6. Setup --------------------------------------------------------------------
-  say "6/7 Setup (vault: $VAULT)"
+  # --- 7. Setup --------------------------------------------------------------------
+  say "7/8 Setup (vault: $VAULT)"
   local SETUP=("$KIT/app/bin/second-brain" setup --vault "$VAULT" ${PASS[@]+"${PASS[@]}"})
   if [ -n "$TTY" ]; then run "${SETUP[@]}" <"$TTY"; else run "${SETUP[@]}" --yes; fi
 
-  # --- 7. Open the app ---------------------------------------------------------------
+  # --- 8. Open the app ---------------------------------------------------------------
   # The launcher starts the server when the login item has not, then opens the app.
-  say "7/7 The Setup page"
+  say "8/8 The Setup page"
   local PORT=19300
   [ -f "$STATE/settings.json" ] && [ -n "$NODE" ] && PORT=$("$NODE" -e 'try{console.log(require(process.argv[1]).port||19300)}catch{console.log(19300)}' "$STATE/settings.json")
   run "$KIT/app/bin/second-brain"

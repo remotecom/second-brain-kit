@@ -17,6 +17,7 @@
 //   --timezone <zone>   default: this Mac's zone
 //   --port <n>          default 19300
 //   --no-login-item     do not install the LaunchAgent
+//   --no-obsidian       do not add the vault to Obsidian's vault list
 //   --yes               accept defaults, ask nothing
 
 const fs = require('fs');
@@ -37,7 +38,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) { o._.push(a); continue; }
     const [k, v] = a.slice(2).split('=');
-    if (['yes', 'no-login-item', 'write', 'wait', 'json', 'post'].includes(k)) o[k] = true;
+    if (['yes', 'no-login-item', 'no-obsidian', 'write', 'wait', 'json', 'post'].includes(k)) o[k] = true;
     else o[k] = v !== undefined ? v : argv[++i];
   }
   return o;
@@ -183,6 +184,12 @@ async function setup(o) {
     const made = createVault(vault, { name, email, slackUserId, timezone });
     made.forEach((m) => out(`  + ${m}`));
     if (!made.length) out('  (everything was already there; nothing was changed)');
+
+    const S = require('./lib/setup');
+    if (!o['no-obsidian'] && S.obsidianInstalled()) {
+      const ob = S.registerVault(vault);
+      out(ob.registered ? `  ✓ Obsidian knows this vault${ob.added ? ' (added)' : ''}` : `  ! Obsidian: ${ob.why} Then press Apply on the Setup page (Obsidian step).`);
+    }
 
     install.writeSettings({ vault, port, kit: KIT_DIR });
     out(`  ✓ settings: ${install.SETTINGS}`);

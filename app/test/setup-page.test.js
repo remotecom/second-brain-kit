@@ -134,3 +134,24 @@ test('graph colors wait while Obsidian runs (A5)', () => {
   assert.match(r.why, /Close Obsidian/);
   assert.ok(!fs.existsSync(path.join(v, '.obsidian', 'graph.json')));
 });
+
+test('registerVault adds the vault to Obsidian once, keeps the others, and waits while Obsidian is open', () => {
+  const v = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-obs-'));
+  const cfgFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-obsc-')), 'obsidian', 'obsidian.json');
+  process.env.SECOND_BRAIN_OBSIDIAN_CONFIG = cfgFile;
+  try {
+    assert.equal(S.obsidianVaultId(v), null);
+    assert.deepEqual(S.registerVault(v, { running: true }), { registered: false, why: 'Close Obsidian so setup can add this vault to it.' });
+    assert.ok(!fs.existsSync(cfgFile), 'nothing written while Obsidian is open');
+    fs.mkdirSync(path.dirname(cfgFile), { recursive: true });
+    fs.writeFileSync(cfgFile, JSON.stringify({ vaults: { aaaa: { path: '/somewhere/else', ts: 1, open: true } }, theme: 'x' }));
+    const r = S.registerVault(v, { running: false });
+    assert.equal(r.added, true);
+    const j = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+    assert.equal(j.vaults[r.id].path, path.resolve(v));
+    assert.equal(j.vaults.aaaa.path, '/somewhere/else', 'other vaults stay');
+    assert.equal(j.theme, 'x', 'other settings stay');
+    assert.equal(S.obsidianVaultId(v), r.id);
+    assert.deepEqual(S.registerVault(v, { running: true }), { registered: true, id: r.id, added: false }, 'already there: no write needed');
+  } finally { delete process.env.SECOND_BRAIN_OBSIDIAN_CONFIG; }
+});

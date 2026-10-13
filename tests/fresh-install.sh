@@ -62,7 +62,7 @@ say ""; say "Repo \`$REPO\` branch \`$BRANCH\` · first run $DAYS day(s) · shap
 # --- 1. clone + setup ------------------------------------------------------------
 say "## 1. Install"
 git clone -q -b "$BRANCH" "$REPO" "$KIT" 2>>"$DIR/clone.log"; check "$([ -x "$KIT/app/bin/second-brain" ] && echo ok)" "clone ($(git -C "$KIT" rev-parse --short HEAD 2>/dev/null))"
-"$KIT/app/bin/second-brain" setup --vault "$VAULT" --port "$PORT" --no-login-item --yes </dev/null > "$DIR/setup.log" 2>&1
+"$KIT/app/bin/second-brain" setup --vault "$VAULT" --port "$PORT" --no-login-item --no-obsidian --yes </dev/null > "$DIR/setup.log" 2>&1
 check "$([ -f "$VAULT/config.yaml" ] && [ -f "$VAULT/wiki/index.md" ] && grep -q '^<!-- kit:begin' "$VAULT/CLAUDE.md" && echo ok)" "setup made the vault (config.yaml, wiki/index.md, kit block)"
 check "$([ "$(shasum "$PLIST" 2>/dev/null)" = "$PLIST_BEFORE" ] && echo ok)" "the live login item was not touched"
 

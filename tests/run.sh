@@ -331,7 +331,7 @@ IS=$(mktemp -d)
 printf '{\n  "vault": "%s/vault",\n  "port": 19399,\n  "kit": "%s"\n}\n' "$IS" "$KIT" > "$IS/settings.json"
 in_out=$(SECOND_BRAIN_STATE_DIR="$IS" SECOND_BRAIN_DIR= SECOND_BRAIN_VAULT= bash "$KIT/install.sh" --dry-run --port 19399 </dev/null 2>&1); in_rc=$?
 is "dry run exits 0" "0" "$in_rc"
-is "dry run walks all 7 steps" "7" "$(printf '%s' "$in_out" | grep -cE '^.*[1-7]/7 ')"
+is "dry run walks all 8 steps" "8" "$(printf '%s' "$in_out" | grep -cE '^.*[1-8]/8 ')"
 is "an existing install keeps its kit (from settings.json)" "1" "$(printf '%s' "$in_out" | grep -cF "would run: git -C $KIT pull")"
 is "an existing install keeps its vault, and other flags reach setup" "1" "$(printf '%s' "$in_out" | grep -cF "setup --vault $IS/vault --port 19399")"
 is "dry run changes nothing" "no" "$([ -e "$IS/vault" ] && echo yes || echo no)"

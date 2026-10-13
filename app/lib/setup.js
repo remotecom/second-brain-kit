@@ -7,6 +7,7 @@
 // .bot/state/setup.json: the last probe results and which steps are done.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { pressButtons, collect } = require('./buttons');
@@ -179,9 +180,34 @@ function save(vault, step, v = {}) {
 // Kit groups are remembered in .bot/state so the owner's own groups stay.
 const PALETTE = [0x4f8ef7, 0xf2a93b, 0x5cc489, 0xe0627a, 0x9b7bf2, 0x3bc0c9, 0xd98c4a, 0x8fb83c, 0xc76bc2, 0x7a8da6, 0xe8d04c, 0x58a6ff];
 function obsidianRunning() { return spawnSync('/usr/bin/pgrep', ['-x', 'Obsidian'], { encoding: 'utf8' }).status === 0; }
+const obsidianInstalled = () => ['/Applications/Obsidian.app', path.join(os.homedir(), 'Applications', 'Obsidian.app')].some((a) => fs.existsSync(a));
+
+// Obsidian's own list of vaults. A folder must be on it before
+// obsidian://open can open it, so setup adds the vault (Obsidian closed only:
+// it rewrites this file when it quits). SECOND_BRAIN_OBSIDIAN_CONFIG: tests.
+const obsidianConfig = () => process.env.SECOND_BRAIN_OBSIDIAN_CONFIG || path.join(os.homedir(), 'Library', 'Application Support', 'obsidian', 'obsidian.json');
+function obsidianVaultId(vault) {
+  let j = {}; try { j = JSON.parse(fs.readFileSync(obsidianConfig(), 'utf8')); } catch {}
+  const hit = Object.entries(j.vaults || {}).find(([, x]) => x && path.resolve(String(x.path || '')) === path.resolve(vault));
+  return hit ? hit[0] : null;
+}
+function registerVault(vault, { running } = {}) {
+  const have = obsidianVaultId(vault);
+  if (have) return { registered: true, id: have, added: false };
+  if (running ?? obsidianRunning()) return { registered: false, why: 'Close Obsidian so setup can add this vault to it.' };
+  const file = obsidianConfig();
+  let j = {}; try { j = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+  const id = require('crypto').randomBytes(8).toString('hex');
+  j.vaults = { ...(j.vaults || {}), [id]: { path: path.resolve(vault), ts: Date.now() } };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(j));
+  return { registered: true, id, added: true };
+}
+
 // opts.running: for tests (whether Obsidian is open); default asks pgrep.
 function writeGraph(vault, { force = false, running } = {}) {
   if (!force && (running ?? obsidianRunning())) return { written: false, why: 'Close Obsidian to apply graph colors (it rewrites the file on exit).' };
+  if (!force) registerVault(vault, { running: false });
   const dir = path.join(vault, '.obsidian');
   const file = path.join(dir, 'graph.json');
   let g = {}; try { g = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
@@ -213,7 +239,7 @@ function view(vault) {
   const o = cfg.owner;
   return {
     steps: STEPS, done: st.done || {}, probes: st.probes || {}, firstRunStarted: firstRunStarted(vault),
-    obsidianRunning: obsidianRunning(),
+    obsidianRunning: obsidianRunning(), obsidianInstalled: obsidianInstalled(), obsidianVaultId: obsidianVaultId(vault),
     current: {
       connectors: cfg.connectors, enabled: Object.fromEntries(SOURCES.map((k) => [k, cfg.sources[k].enabled])),
       owner: { name: o.name, email: o.email, slack_user_id: o.slack_user_id, notion_user_id: o.notion_user_id, timezone: o.timezone },
@@ -224,4 +250,4 @@ function view(vault) {
   };
 }
 
-module.exports = { STEPS, probeConnectors, probeIdentity, probeScope, probePrivacy, save, writeGraph, firstRunStarted, markFirstRun, view, readState };
+module.exports = { STEPS, probeConnectors, probeIdentity, probeScope, probePrivacy, save, writeGraph, registerVault, obsidianVaultId, obsidianInstalled, firstRunStarted, markFirstRun, view, readState };
