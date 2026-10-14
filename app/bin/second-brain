@@ -21,10 +21,19 @@ if ! lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 # SECOND_BRAIN_NO_OPEN=1 starts the server only (the installer's test run).
 [ -z "${SECOND_BRAIN_NO_OPEN:-}" ] || { echo "Second Brain on http://localhost:$PORT (log: $STATE/server.log)"; exit 0; }
-# Its own window: a Chrome app window with its own profile if Chrome is there,
-# else the default browser.
-if [ -d "/Applications/Google Chrome.app" ] || [ -d "$HOME/Applications/Google Chrome.app" ]; then
-  open -na "Google Chrome" --args --app="http://localhost:$PORT" --user-data-dir="$STATE/chrome"
+# Its own window: a Chrome app window (no tabs, no URL bar) if Chrome is there,
+# else the default browser. The window uses your REGULAR Chrome profile
+# ("Default", or SECOND_BRAIN_CHROME_PROFILE, e.g. "Profile 2"). A separate
+# --user-data-dir started a second Chrome with the same bundle id: links from
+# the app, and from other apps (Slack, Mail), then opened in that signed-out
+# Chrome. With one Chrome, links open in tabs where you are signed in.
+CHROME=""
+for c in "/Applications/Google Chrome.app" "$HOME/Applications/Google Chrome.app"; do
+  [ -x "$c/Contents/MacOS/Google Chrome" ] && { CHROME="$c/Contents/MacOS/Google Chrome"; break; }
+done
+if [ -n "$CHROME" ]; then
+  # A running Chrome takes the request and opens the window; this call returns.
+  nohup "$CHROME" --profile-directory="${SECOND_BRAIN_CHROME_PROFILE:-Default}" --app="http://localhost:$PORT" >/dev/null 2>&1 &
 else
   open "http://localhost:$PORT"
 fi
