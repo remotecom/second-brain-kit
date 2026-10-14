@@ -17,10 +17,27 @@ function vault(cfg, claude) {
 test('render fills every placeholder from config', () => {
   const body = K.render(vault());
   assert.ok(!/\{\{[A-Z_]+\}\}/.test(body));
-  assert.match(body, /the Linear team `ENG`/);
-  assert.match(body, /from:<@U0SAMPLE1>/);
   assert.match(body, /## The Second Brain app \(read this first\)/);
-  assert.ok(body.indexOf('read this first') < body.indexOf('### Sync (Slack)'), 'app routing comes before the op specs');
+  assert.match(body, /\.bot\/ops\.md/, 'the block points at the sync specs');
+  assert.doesNotMatch(body, /### Sync \(Slack\)/, 'the sync specs are not in CLAUDE.md');
+  const ops = K.render(vault(), K.OPS_TEMPLATE);
+  assert.ok(!/\{\{[A-Z_]+\}\}/.test(ops));
+  assert.match(ops, /the Linear team `ENG`/);
+  assert.match(ops, /from:<@U0SAMPLE1>/);
+  assert.match(ops, /## Sync \(Slack\)/);
+});
+
+test('update writes .bot/ops.md and keeps CLAUDE.md under the 40k warning', () => {
+  const v = vault(undefined, '# Mine\n');
+  const r = K.update(v, { write: true });
+  assert.equal(r.opsStatus, 'inserted');
+  assert.match(fs.readFileSync(path.join(v, '.bot', 'ops.md'), 'utf8'), /## Sync \(Google Drive\)/);
+  assert.ok(fs.statSync(path.join(v, 'CLAUDE.md')).size < 30000);
+  assert.equal(K.update(v, { write: true }).opsStatus, 'unchanged');
+  // A dry run never writes it.
+  const d = vault();
+  assert.equal(K.update(d).opsStatus, 'inserted');
+  assert.ok(!fs.existsSync(path.join(d, '.bot', 'ops.md')));
 });
 
 test('first update puts the block on top and keeps the owner text exactly', () => {
@@ -50,7 +67,8 @@ test('re-render leaves text outside the markers byte-identical', () => {
   assert.equal(t2.slice(0, at2.start), before);
   assert.equal(t2.slice(at2.end), after);
   assert.match(at2.body, /initiative `abc-123`/);
-  assert.match(r.diff, /^\+ .*U0OTHER22/m);
+  assert.match(r.diff, /^\+ .*abc-123/m);
+  assert.match(fs.readFileSync(path.join(v, '.bot', 'ops.md'), 'utf8'), /U0OTHER22/, 'the ops file follows config too');
   assert.equal(K.update(v, { write: true }).status, 'unchanged');
 });
 

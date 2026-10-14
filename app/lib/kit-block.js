@@ -12,7 +12,11 @@
 //   render(vault)            -> the block body for this vault
 //   apply(text, body)        -> { status, text, diff }
 //                               status: inserted | updated | unchanged | edited-inside
-//   update(vault, {write})   -> apply() on <vault>/CLAUDE.md; writes only if asked
+//   update(vault, {write})   -> apply() on <vault>/CLAUDE.md; writes only if asked.
+//                               Also writes <vault>/.bot/ops.md (the sync specs,
+//                               from templates/vault/OPS.md). They live there,
+//                               not in the block, so a session does not load
+//                               them: Claude Code warns above 40k characters.
 
 const fs = require('fs');
 const path = require('path');
@@ -22,6 +26,8 @@ const { KIT_DIR } = require('./kit');
 
 const VERSION = 1;
 const TEMPLATE = path.join(KIT_DIR, 'templates', 'vault', 'CLAUDE.md');
+const OPS_TEMPLATE = path.join(KIT_DIR, 'templates', 'vault', 'OPS.md');
+const OPS_FILE = path.join('.bot', 'ops.md');
 const BEGIN = /<!-- kit:begin v(\d+) sha=([0-9a-f]{12}) -->\n/;
 const END = '<!-- kit:end -->';
 
@@ -60,11 +66,11 @@ function values(vault) {
   };
 }
 
-function render(vault) {
+function render(vault, template = TEMPLATE) {
   const v = values(vault);
-  const body = fs.readFileSync(TEMPLATE, 'utf8').replace(/\{\{([A-Z_]+)\}\}/g, (m, k) => (k in v ? v[k] : m));
+  const body = fs.readFileSync(template, 'utf8').replace(/\{\{([A-Z_]+)\}\}/g, (m, k) => (k in v ? v[k] : m));
   const left = body.match(/\{\{[A-Z_]+\}\}/g);
-  if (left) throw new Error(`kit block template has unknown placeholders: ${[...new Set(left)].join(', ')}`);
+  if (left) throw new Error(`${path.basename(template)} template has unknown placeholders: ${[...new Set(left)].join(', ')}`);
   return body.endsWith('\n') ? body : `${body}\n`;
 }
 
@@ -122,7 +128,14 @@ function update(vault, { write = false, ownerHeader } = {}) {
   try { text = fs.readFileSync(file, 'utf8'); } catch {}
   const r = apply(text, render(vault), { ownerHeader });
   if (write && (r.status === 'inserted' || r.status === 'updated')) fs.writeFileSync(file, r.text);
-  return { ...r, file };
+  // The ops file is the app's alone (no owner text, no sha): keep it current,
+  // also when the owner's edit inside the block stops the CLAUDE.md update.
+  const ops = path.join(vault, OPS_FILE);
+  const opsText = render(vault, OPS_TEMPLATE);
+  let old = null; try { old = fs.readFileSync(ops, 'utf8'); } catch {}
+  const opsStatus = old === opsText ? 'unchanged' : old === null ? 'inserted' : 'updated';
+  if (write && opsStatus !== 'unchanged') { fs.mkdirSync(path.dirname(ops), { recursive: true }); fs.writeFileSync(ops, opsText); }
+  return { ...r, file, ops, opsStatus };
 }
 
-module.exports = { render, apply, update, locate, lineDiff, VERSION, TEMPLATE };
+module.exports = { render, apply, update, locate, lineDiff, VERSION, TEMPLATE, OPS_TEMPLATE, OPS_FILE };

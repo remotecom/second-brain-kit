@@ -107,7 +107,7 @@ sources:
   gmail:
     # SPECIFIED BUT NOT IMPLEMENTED. Enabling it needs THREE edits in one
     # change, one of which is wiki.promotion.person_external_min below. See the
-    # Gmail op in CLAUDE.md.
+    # Gmail op in .bot/ops.md (rendered from templates/vault/OPS.md).
     enabled: false
     window_days: 4
     max_threads_per_sync: 150

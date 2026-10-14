@@ -190,8 +190,13 @@ rm -f "$VAULT_ROOT/$PROBE_GMAIL"
 # wiki/people/ at 1. CLAUDE.md used to hardcode "1 substantive thread".
 hasnt "the vault CLAUDE.md template does not hardcode the old external-person threshold of 1" \
       "$(cat "$KIT"/templates/vault/CLAUDE.md)" "External people (partner/vendor DRIs): \*\*1 substantive thread\*\*"
-has   "the vault CLAUDE.md template documents a Sync (Gmail) op (config.example.yaml points at it)" \
-      "$(cat "$KIT"/templates/vault/CLAUDE.md)" "### Sync (Gmail)"
+has   "the vault ops template documents a Sync (Gmail) op (config.example.yaml points at it)" \
+      "$(cat "$KIT"/templates/vault/OPS.md)" "## Sync (Gmail)"
+# Claude Code warns when CLAUDE.md is over 40k characters and every session
+# loads all of it. The sync specs live in OPS.md (.bot/ops.md in the vault).
+claude_md_chars=$(wc -c < "$KIT"/templates/vault/CLAUDE.md | tr -d ' ')
+is "the vault CLAUDE.md template stays under 30k characters" "yes" "$([ "$claude_md_chars" -lt 30000 ] && echo yes || echo "no ($claude_md_chars)")"
+has "the CLAUDE.md template points at .bot/ops.md" "$(cat "$KIT"/templates/vault/CLAUDE.md)" ".bot/ops.md"
 has   "config ships person_external_min: 2" "$(cat "$KIT"/config.example.yaml)" "person_external_min: 2"
 
 # ===========================================================================
@@ -262,7 +267,7 @@ for f in templates/vault/gcal/README.md templates/vault/gdrive/files/.gitkeep te
 done
 # Nothing private may sit in the template (an old sync once left day files
 # there): only READMEs, .gitkeep, .gitignore and CLAUDE.md.
-stray=$(cd "$KIT/templates/vault" && find . -type f ! -name README.md ! -name .gitkeep ! -name .gitignore ! -path ./CLAUDE.md | tr '\n' ' ')
+stray=$(cd "$KIT/templates/vault" && find . -type f ! -name README.md ! -name .gitkeep ! -name .gitignore ! -path ./CLAUDE.md ! -path ./OPS.md | tr '\n' ' ')
 is "templates/vault holds only skeleton files" "" "$stray"
 
 # ===========================================================================

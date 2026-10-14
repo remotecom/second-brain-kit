@@ -81,6 +81,21 @@
     };
     ws.onopen = () => ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
     term.onData((d) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'in', data: d })); });
+    // xterm sends a bare CR for Shift+Enter, so Claude submits the prompt.
+    // ESC+CR is the newline that Claude Code's /terminal-setup binds. Cancel
+    // the event too: if not, the browser fires keypress and xterm sends a CR
+    // as well (newline AND submit). From briefcase/public/app.js.
+    term.attachCustomKeyEventHandler((e) => {
+      const stop = () => { e.preventDefault(); e.stopPropagation(); return false; };
+      if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.type === 'keydown' && ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'in', data: '\x1b\r' }));
+        return stop();
+      }
+      // claude is the direct child of the pty, with no shell to bring it back:
+      // Ctrl+Z would stop it and the panel would hang.
+      if (e.type === 'keydown' && e.key === 'z' && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) return stop();
+      return true;
+    });
     term.onResize(({ cols, rows }) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'resize', cols, rows })); });
     window.addEventListener('resize', () => fit && fit.fit());
     term.focus();
