@@ -61,7 +61,11 @@
     term = new window.Terminal({ fontSize: 13, fontFamily: 'Menlo, monospace', cursorBlink: true, scrollback: 20000, theme: { background: '#141414' } });
     fit = new window.FitAddon.FitAddon();
     term.loadAddon(fit);
-    term.loadAddon(new window.WebLinksAddon.WebLinksAddon((e, uri) => window.open(uri, '_blank', 'noopener')));
+    // Plain URLs and Claude's OSC 8 hyperlinks both open through the server
+    // (/api/brain/open), in a normal browser tab. window.open from this --app
+    // window made an app window with no tabs or URL bar.
+    term.options.linkHandler = { activate: (e, uri) => window.openLink(uri), allowNonHttpProtocols: false };
+    term.loadAddon(new window.WebLinksAddon.WebLinksAddon((e, uri) => window.openLink(uri)));
     term.open(document.getElementById('sp-term'));
     setTimeout(() => fit.fit(), 0);
     if (s.state === 'done') { term.write('\x1b[90mThis session is done. Its transcript is on the Sessions page.\x1b[0m\r\n'); return; }

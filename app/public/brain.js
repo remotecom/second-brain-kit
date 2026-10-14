@@ -7,6 +7,19 @@
   const api = (p, opt = {}) =>
     fetch(p, { ...opt, headers: { ...(opt.headers || {}), 'Content-Type': 'application/json', 'X-Brain-Token': TOKEN } })
       .then((r) => r.json());
+  // Outside links open in a normal browser tab, through the server: from this
+  // --app window Chrome would open them as another app window (no tabs, no
+  // URL bar). Pages and session.js both use this.
+  window.openLink = (uri) => api('/api/brain/open', { method: 'POST', body: JSON.stringify({ url: uri }) })
+    .then((r) => { if (r && r.error) console.warn('open link:', r.error); });
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest && e.target.closest('a[href]');
+    if (!a || e.defaultPrevented) return;
+    let u; try { u = new URL(a.getAttribute('href'), location.href); } catch { return; }
+    if ((u.protocol !== 'http:' && u.protocol !== 'https:') || u.origin === location.origin) return;
+    e.preventDefault();
+    window.openLink(u.href);
+  });
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const store = {
     get: (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },

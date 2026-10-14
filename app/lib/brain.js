@@ -649,6 +649,18 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
   if (!p.startsWith('/api/brain/') && !p.startsWith('/api/setup') && !p.startsWith('/api/sessions') && p !== '/api/update') return false;
 
 
+  // A link clicked in the app. In a Chrome --app window, window.open (and
+  // xterm's own OSC 8 handler) make the page an app window too: no tabs, no
+  // URL bar. macOS `open` gives it to the default browser, which puts it in a
+  // normal tab of the signed-in profile. http(s) only; no shell.
+  if (p === '/api/brain/open' && req.method === 'POST') {
+    const b = await readBody(req);
+    let u; try { u = new URL(String(b.url || '')); } catch { return json(res, 400, { error: 'not a URL' }), true; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return json(res, 400, { error: 'only http(s) links' }), true;
+    spawn('/usr/bin/open', [u.href], { stdio: 'ignore', detached: true }).unref();
+    return json(res, 200, { ok: true }), true;
+  }
+
   // --- Sessions (T19): real Claude Code in a pty, streamed over /ws.
   if (p === '/api/sessions' && req.method === 'GET') return json(res, 200, { sessions: SESSIONS ? SESSIONS.list() : [], max: getConfig(VAULT).sessions.max_running }), true;
   if (p === '/api/sessions' && req.method === 'POST') {
