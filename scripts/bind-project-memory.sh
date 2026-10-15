@@ -80,6 +80,9 @@ for memdir in "$CLAUDE_PROJECTS/${ENC}"-*/memory; do
   encdir=$(basename "$(dirname "$memdir")")
   slug=${encdir#"${ENC}"-}
   target="$VAULT/projects/$slug"
+  # cowork/ and sessions/ are the vault's own stores (capture, saved sessions).
+  # A repo with one of those names must not be merged into them.
+  case "$slug" in cowork|sessions) echo "  skip     $slug  (a repo with a reserved name; its memories stay in ~/.claude)"; continue ;; esac
 
   # --- already correct: memory is a symlink pointing at the vault ---
   if [ -L "$memdir" ] && [ "$(readlink "$memdir")" = "$target" ] && [ -d "$target" ] && [ ! -L "$target" ]; then
@@ -149,6 +152,8 @@ for target in "$VAULT"/projects/*; do
   # projects/cowork is not a repo — it's the `capture` op's store for runtimes
   # with no auto-memory. It must never get a ~/.claude binding.
   [ "$slug" = "cowork" ] && { echo "  skip     cowork (capture store, intentionally unbound)"; continue; }
+  # projects/sessions holds sessions saved from the app (Save & close). Not a repo.
+  [ "$slug" = "sessions" ] && { echo "  skip     sessions (saved sessions, intentionally unbound)"; continue; }
   encdir="$CLAUDE_PROJECTS/${ENC}-$slug"
   memdir="$encdir/memory"
   if [ -L "$memdir" ] && [ "$(readlink "$memdir")" = "$target" ]; then

@@ -44,6 +44,10 @@ corrupt them.
   it that way. Files are flat inside each project folder.
 - `projects/cowork/` — a plain folder for memories written by the `capture` op
   from runtimes without auto-memory.
+- `projects/sessions/` — **RAW, immutable.** App sessions the owner saved with
+  "Save & close": the transcript text word for word, one file per session per
+  day (`<YYYY-MM-DD>-<session id>.md`), credentials redacted. The app writes
+  them; ingest reads them like any other raw file.
 - `slack/*.md` — **RAW, immutable.** Forward-sync daily notes (`sync slack`).
 - `slack/.last-sync` — ISO timestamp of the most recent Slack message `ts` synced.
 - `linear/{issues,projects,initiatives,docs}/*.md` — **RAW, immutable.**
@@ -358,12 +362,14 @@ When you say **"lint"**, report (don't auto-fix without approval):
   `gdrive/`, `gmail/`, or `gcal/`.** All seven are RAW and immutable. Only
   `wiki/` is mutable. This includes *annotating* raw: never stamp
   `wiki_ingest: false` onto a raw file to steer synthesis. Filtering is
-  ingest's job; raw records what happened. Two narrow exceptions, both
+  ingest's job; raw records what happened. Three narrow exceptions, all
   write-new-only:
   - A `sync` op rewrites its own raw class from source: RAW CONTENT ONLY,
     never wiki synthesis (see RAW PURITY).
   - The `capture` op creates **new** files under `projects/cowork/` (plus its
     `MEMORY.md` index). It never edits an existing raw file.
+  - The app's "Save & close" writes `projects/sessions/` from the session's
+    own transcript. A Claude session never writes there.
 - **Never hand-move or hand-relink anything under `projects/`.** The
   vault-canonical direction is load-bearing for sandboxed runtimes;
   `bind-project-memory.sh` owns it.

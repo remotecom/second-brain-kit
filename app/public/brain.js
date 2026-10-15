@@ -144,16 +144,64 @@
         }
       }
     }
-    // Sessions: the open and asleep ones, newest first; done ones on the page.
+    // Sessions: the open and asleep ones, in the owner's order (drag to move,
+    // double-click to rename); done ones on the page.
     const live = sessions.filter((s) => s.state !== 'done');
     html += `<div class="nav-item group ${sel === 'chat' ? 'sel' : ''}" data-sel="chat"><span class="lbl">Vault chat</span></div>`;
     html += `<div class="nav-item group ${sel === 'sessions' ? 'sel' : ''}" data-sel="sessions"><span class="lbl">Sessions</span>${live.length ? `<span class="badge">${live.length}</span>` : ''}</div>`;
-    for (const s of live.slice(0, 8)) html += `<div class="nav-item child" data-session="${esc(s.id)}"><span class="dot ${s.running ? 'running' : 'never'}"></span><span class="lbl">${esc(s.title)}</span></div>`;
+    for (const s of live.slice(0, 8)) html += `<div class="nav-item child" draggable="true" data-session="${esc(s.id)}" title="Drag to move · double-click to rename"><span class="dot ${s.running ? 'running' : 'never'}"></span><span class="lbl">${esc(s.title)}</span></div>`;
     const needsSetup = setup.some((f) => f.level === 'error');
     html += `<div class="nav-foot">
       <div class="nav-item ${sel === 'setup' ? 'sel' : ''}" data-sel="setup"><span class="lbl">Setup</span>${needsSetup ? '<span class="badge">!</span>' : ''}</div>
       <a class="nav-item" href="obsidian://open?vault=${encodeURIComponent(vaultName)}"><span class="lbl">Open in Obsidian ↗</span></a></div>`;
-    if (html !== lastNav) { lastNav = html; $('#nav').innerHTML = html; }
+    // A redraw mid-drag would drop the item being dragged: wait for the drop.
+    if (html !== lastNav && !dragId) { lastNav = html; $('#nav').innerHTML = html; }
+  }
+
+  // --- sessions in the nav: drag to reorder, double-click to rename ---
+  let dragId = null;
+  const nav = $('#nav');
+  const liveIds = () => [...nav.querySelectorAll('[data-session]')].map((x) => x.dataset.session);
+  nav.addEventListener('dragstart', (e) => {
+    const it = e.target.closest && e.target.closest('[data-session]');
+    if (!it) return;
+    dragId = it.dataset.session;
+    it.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', dragId); } catch {}
+  });
+  nav.addEventListener('dragover', (e) => {
+    const it = dragId && e.target.closest && e.target.closest('[data-session]');
+    if (!it || it.dataset.session === dragId) return;
+    e.preventDefault();
+    const r = it.getBoundingClientRect();
+    const moving = nav.querySelector(`[data-session="${dragId}"]`);
+    if (moving) it.parentNode.insertBefore(moving, e.clientY < r.top + r.height / 2 ? it : it.nextSibling);
+  });
+  nav.addEventListener('drop', (e) => { if (dragId) e.preventDefault(); });
+  nav.addEventListener('dragend', async () => {
+    if (!dragId) return;
+    const moved = nav.querySelector(`[data-session="${dragId}"]`);
+    if (moved) moved.classList.remove('dragging');
+    const ids = liveIds();
+    dragId = null;
+    const r = await api('/api/sessions/order', { method: 'POST', body: JSON.stringify({ ids }) });
+    if (r.sessions) sessions = r.sessions;
+    lastNav = ''; paintNav();
+  });
+  nav.addEventListener('dblclick', (e) => {
+    const it = e.target.closest && e.target.closest('[data-session]');
+    if (it) renameSession(it.dataset.session);
+  });
+  async function renameSession(id) {
+    const s = sessions.find((x) => x.id === id);
+    if (!s) return;
+    const name = prompt('Rename this session', s.title);
+    if (!name || name.trim() === s.title) return;
+    const r = await api(`/api/sessions/${id}/rename`, { method: 'POST', body: JSON.stringify({ title: name }) });
+    if (r.error) return alert(r.error);
+    sessions = sessions.map((x) => (x.id === id ? r.session : x));
+    lastNav = ''; lastPage = ''; paint();
   }
 
   // Only touch the DOM when the page changed, so polling never resets the
@@ -229,14 +277,15 @@
     return `<button class="ghost small" data-run="${b.id}" ${running ? 'disabled' : ''}>${running ? 'Running…' : 'Run'}</button>`;
   }
 
-  // Every session, open and done. Done ones keep their transcript 30 days.
+  // Every session, open and done, in the owner's order.
   function sessionsPage() {
-    const row = (s) => `<tr><td><span class="dot ${s.running ? 'running' : s.state === 'done' ? 'ok' : 'never'}" style="display:inline-block;margin-right:8px"></span>${esc(s.title)}</td>
+    const row = (s) => `<tr><td><span class="dot ${s.running ? 'running' : s.state === 'done' ? 'ok' : 'never'}" style="display:inline-block;margin-right:8px"></span>${esc(s.title)} <button class="ghost small" data-rename="${esc(s.id)}" title="Rename">✎</button>${(s.saved || []).length ? `<div class="muted" style="font-size:11px">saved to ${s.saved.map((x) => esc(x)).join(', ')}</div>` : ''}</td>
       <td class="muted">${esc(s.kind)} · ${esc(s.model)}</td><td>${esc(s.state)}${s.outcome ? ` · ${esc(s.outcome)}` : ''}</td><td class="muted">${ago(s.endedAt ? new Date(s.endedAt).toISOString() : new Date(s.lastInput).toISOString())}</td>
       <td>${s.state === 'done' ? `<button class="ghost small" data-transcript="${esc(s.id)}">Transcript</button>` : `<button class="small" data-session="${esc(s.id)}">Open</button>`}</td></tr>`;
     const open = sessions.filter((s) => s.state !== 'done'), done = sessions.filter((s) => s.state === 'done');
     const tr = transcript ? `<div class="card"><div class="k" style="color:var(--muted)">Transcript</div><div class="doc">${transcript.lines.map((l) => `<p><b>${l.who === 'user' ? 'You' : 'Claude'}:</b> ${esc(l.text).replace(/\n/g, '<br>')}</p>`).join('') || '<p class="muted">Empty.</p>'}</div></div>` : '';
     return `<h1>Sessions</h1><div class="sub">Real Claude Code sessions the app opened next to an item. At most ${esc(String(4))} run at once; one with no input for 30 minutes goes to sleep and continues where it stopped when you open it.</div>
+      <div class="sub"><b>Save &amp; close</b> on a session copies it, word for word, to <code>projects/sessions/</code> in your vault (credentials redacted). The next ingest folds it into the wiki, as it does every raw file. Plain <b>Close</b> saves nothing.</div>
       <table class="t"><thead><tr><th>Open</th><th></th><th></th><th></th><th></th></tr></thead><tbody>${open.map(row).join('') || '<tr><td class="muted" colspan="5">None.</td></tr>'}</tbody></table>
       <table class="t"><thead><tr><th>Done</th><th></th><th></th><th></th><th></th></tr></thead><tbody>${done.map(row).join('') || '<tr><td class="muted" colspan="5">None yet.</td></tr>'}</tbody></table>${tr}`;
   }
@@ -491,6 +540,8 @@
       alert('Updating. The app restarts in a moment; this page reloads.');
       return setTimeout(() => location.reload(), 8000);
     }
+    const rn = t.closest('[data-rename]');
+    if (rn) return renameSession(rn.dataset.rename);
     const so = t.closest('[data-session]');
     if (so) return window.SessionPanel.openId(so.dataset.session);
     const tx = t.closest('[data-transcript]');

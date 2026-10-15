@@ -183,3 +183,8 @@ body.sp-dragging #sp-term { pointer-events: none; }
 .shape-row { display: grid; grid-template-columns: 160px 1fr auto; gap: 6px; align-items: center; margin: 4px 0; }
 .shape-row input { width: 100%; }
 .shape-row .why { grid-column: 1 / -1; font-size: 12px; margin: -2px 0 4px; }
+/* Sessions in the nav: drag to move, double-click (or the panel title) to rename. */
+.nav-item.child[draggable="true"] { cursor: grab; }
+.nav-item.child.dragging { opacity: .45; }
+.sp-name { cursor: text; }
+.sp-name:hover { text-decoration: underline dotted; }

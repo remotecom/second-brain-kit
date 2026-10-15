@@ -572,7 +572,7 @@ function sessionSpec(kind, item = {}) {
 
 // Do one outcome's app action. Returns a short summary for the session.
 async function runOutcome(action, claudeBin) {
-  if (action.type === 'repair') { const made = doctor.repair(VAULT); doctorNow(true); return made.length ? `created ${made.join(', ')}` : 'nothing was missing'; }
+  if (action.type === 'repair') { const made = doctor.repair(VAULT, { retention: true }); doctorNow(true); return made.length ? `fixed ${made.join(', ')}` : 'nothing was missing'; }
   if (action.type === 'doctor') { const e = doctorNow(true).filter((x) => x.level === 'error'); return e.length ? `${e.length} issue(s) left` : 'nothing stops the bots'; }
   if (action.type === 'shape-apply') {
     const d = wikiShape.readState(VAULT).draft;
@@ -699,17 +699,34 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     } catch { return json(res, 404, { error: 'no transcript kept for this session' }), true; }
     return json(res, 200, { lines }), true;
   }
-  const sm = p.match(/^\/api\/sessions\/([0-9a-f]{10})\/(open|sleep|close)$/);
+  // The owner's order of the list (dragged in the nav), top first.
+  if (p === '/api/sessions/order' && req.method === 'POST') {
+    if (!SESSIONS) return json(res, 500, { error: 'claude CLI not found' }), true;
+    const b = await readBody(req);
+    SESSIONS.reorder(b.ids);
+    return json(res, 200, { sessions: SESSIONS.list() }), true;
+  }
+  const sm = p.match(/^\/api\/sessions\/([0-9a-f]{10})\/(open|sleep|close|rename)$/);
   if (sm && req.method === 'POST') {
     const s = SESSIONS && SESSIONS.get(sm[1]);
     if (!s) return json(res, 404, { error: 'no such session' }), true;
     const b = await readBody(req);
+    let saved = null;
     try {
       if (sm[2] === 'open') SESSIONS.open(s.id, b.cols, b.rows);
       else if (sm[2] === 'sleep') s.sleep();
-      else s.finish(String(b.outcome || 'closed').slice(0, 80));
+      else if (sm[2] === 'rename') SESSIONS.rename(s.id, b.title);
+      else {
+        s.finish(String(b.outcome || 'closed').slice(0, 80));
+        // Save & close: the transcript goes to raw (projects/sessions/); the
+        // next ingest picks it up. Nothing else starts here.
+        if (b.save) {
+          saved = require('./session-raw').saveSession(VAULT, s);
+          if (!saved.error) { s.saved = [...new Set([...s.saved, ...saved.written])]; SESSIONS.save(); }
+        }
+      }
     } catch (e) { return json(res, 400, { error: e.message }), true; }
-    return json(res, 200, { session: s.toJSON() }), true;
+    return json(res, 200, { session: s.toJSON(), saved }), true;
   }
 
   // --- Setup page (T14). Probes press buttons; code reads; saves edit config as text.
@@ -797,7 +814,7 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
   // Repair creates only what is missing (folders, starter wiki files); it
   // never overwrites. The session-based Repair (Phase 2) builds on this.
   if (p === '/api/brain/doctor/repair' && req.method === 'POST') {
-    const made = doctor.repair(VAULT);
+    const made = doctor.repair(VAULT, { retention: true });
     const left = doctorNow(true).filter((f) => f.level === 'error');
     json(res, 200, { made, left });
     return true;

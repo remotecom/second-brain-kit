@@ -19,6 +19,9 @@
 //   --no-login-item     do not install the LaunchAgent
 //   --no-obsidian       do not add the vault to Obsidian's vault list
 //   --no-dock-app       do not make ~/Applications/Second Brain.app or add it to the Dock
+//   --no-bind           do not move Claude Code project memories into the vault
+// A side install (SECOND_BRAIN_STATE_DIR set: the release check, a demo) skips
+// the Mac-wide steps: the Dock app, binding memories, and transcript retention.
 //   --yes               accept defaults, ask nothing
 
 const fs = require('fs');
@@ -39,7 +42,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) { o._.push(a); continue; }
     const [k, v] = a.slice(2).split('=');
-    if (['yes', 'no-login-item', 'no-obsidian', 'no-dock-app', 'write', 'wait', 'json', 'post'].includes(k)) o[k] = true;
+    if (['yes', 'no-login-item', 'no-obsidian', 'no-dock-app', 'no-bind', 'write', 'wait', 'json', 'post'].includes(k)) o[k] = true;
     else o[k] = v !== undefined ? v : argv[++i];
   }
   return o;
@@ -200,7 +203,25 @@ async function setup(o) {
       out(`  ✓ login item: ${li.file}${li.loaded ? ' (started)' : process.env.SECOND_BRAIN_NO_LAUNCHCTL ? ' (not loaded: test mode)' : ` (NOT started: ${String(li.error || '').trim()})`}`);
     }
 
-    if (!o['no-dock-app']) {
+    // Mac-wide steps. Never for a side install: binding would move this
+    // Mac's real project memories into a throwaway vault.
+    const side = !!process.env.SECOND_BRAIN_STATE_DIR;
+    if (side) out('  • side install (SECOND_BRAIN_STATE_DIR): Dock app, memory binding and retention skipped');
+    if (!side) {
+      try {
+        const r = require('./lib/retention').ensure();
+        out(`  ✓ Claude Code keeps transcripts (cleanupPeriodDays ${require('./lib/retention').KEEP_DAYS})${r === 'set' ? ': set now in ~/.claude/settings.json' : ''}`);
+      } catch (e) { out(`  ! transcript retention: ${e.message}. The doctor shows the fix.`); }
+    }
+    if (!side && !o['no-bind']) {
+      // Project memories become real folders in the vault's projects/, so
+      // ingest reads them and Claude Code's cleanup cannot delete them.
+      const b = spawnSync('/bin/bash', [path.join(KIT_DIR, 'scripts', 'bind-project-memory.sh'), '--vault', vault, '--apply'], { encoding: 'utf8', timeout: 120000 });
+      const moved = (b.stdout || '').split('\n').filter((l) => /^\s+(ADOPT|MIGRATE|MERGE|BIND)\s/.test(l)).length;
+      const backup = ((b.stdout || '').match(/backup: (.+)/) || [])[1];
+      out(`  ✓ project memories: ${moved ? `${moved} project(s) bound into ${path.join(vault, 'projects')}${backup ? ` (backup: ${backup})` : ''}` : 'nothing to bind'}`);
+    }
+    if (!side && !o['no-dock-app']) {
       const D = require('./lib/dock-app');
       try {
         D.write(KIT_DIR);
@@ -403,9 +424,12 @@ function postUpdate(vault, write) {
   else if (kb.status !== 'unchanged') steps.push(`CLAUDE.md: kit block ${kb.status} (${kb.diff.split('\n').filter(Boolean).length} line(s) differ)`);
   // The Dock app runs this kit's launcher: rewrite it so it follows the kit.
   // An update never touches the Dock itself; setup adds it once.
+  // A side install (SECOND_BRAIN_STATE_DIR) never touches the Mac's Dock app.
   const D = require('./lib/dock-app');
-  if (!fs.existsSync(D.appPath())) steps.push(`app: ${D.appPath()} (new; drag it to the Dock)`);
-  if (write) { try { D.write(KIT_DIR); } catch (e) { steps.push(`app: NOT written: ${e.message}`); } }
+  if (!process.env.SECOND_BRAIN_STATE_DIR) {
+    if (!fs.existsSync(D.appPath())) steps.push(`app: ${D.appPath()} (new; drag it to the Dock)`);
+    if (write) { try { D.write(KIT_DIR); } catch (e) { steps.push(`app: NOT written: ${e.message}`); } }
+  }
   return { steps, kitBlock: kb.status };
 }
 

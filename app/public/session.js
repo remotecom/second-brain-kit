@@ -27,10 +27,11 @@
     const s = cur;
     const outs = s.state === 'done' ? '' : (s.outcomes || []).map((o) => `<button class="small ${o.label === suggested ? 'suggest' : 'ghost'}" data-outcome="${esc(o.label)}" title="${o.label === suggested ? 'Claude suggests this one' : ''}">${esc(o.label)}${o.label === suggested ? ' ★' : ''}</button>`).join('');
     return `<header>
-      <div class="sp-title"><span class="dot ${s.running ? 'running' : 'never'}"></span><b>${esc(s.title)}</b> <span class="muted">${esc(s.model)} · ${esc(s.state)}</span></div>
+      <div class="sp-title"><span class="dot ${s.running ? 'running' : 'never'}"></span><b class="sp-name" data-sp="rename" title="Rename">${esc(s.title)}</b> <span class="muted">${esc(s.model)} · ${esc(s.state)}</span></div>
       <span class="spacer"></span>
       ${s.state === 'done' ? '' : `<button class="ghost small" data-sp="sleep" title="Stop the process; keep the session to continue later">Sleep</button>
-      <button class="ghost small" data-sp="close" title="End the session without an outcome">Close</button>`}
+      <button class="ghost small" data-sp="close" title="End the session. Nothing is saved to the vault.">Close</button>
+      <button class="ghost small" data-sp="save" title="End the session and save it to the vault (projects/sessions/). The next ingest picks it up.">Save &amp; close</button>`}
       <button class="ghost small" data-sp="hide" title="Hide the panel; the session keeps running (a tab on the right brings it back)">Hide ▸</button>
     </header>
     ${s.state === 'done' ? `<div class="sp-done">✓ Done: ${esc(s.outcome || 'closed')}. ${s.summary ? esc(s.summary) + '. This panel closes in a moment.' : 'Its transcript is on the Sessions page.'}</div>`
@@ -107,8 +108,16 @@
   }
 
   async function onClick(ev) {
-    const t = ev.target.closest('button');
+    const t = ev.target.closest('button, [data-sp="rename"]');
     if (!t || !cur) return;
+    if (t.dataset.sp === 'rename') {
+      const name = prompt('Rename this session', cur.title);
+      if (!name || name.trim() === cur.title) return;
+      const r = await api(`/api/sessions/${cur.id}/rename`, { method: 'POST', body: JSON.stringify({ title: name }) });
+      if (r.error) { alert(r.error); return; }
+      cur = r.session; paintHeader(); onChange();
+      return;
+    }
     if (t.dataset.outcome) {
       const label = t.dataset.outcome;
       if (!confirm(`${label}? The app does this now and closes the session.`)) return;
@@ -123,12 +132,19 @@
     }
     const a = t.dataset.sp;
     if (a === 'hide') return hide();
-    if (a === 'sleep' || a === 'close') {
-      if (a === 'close' && !confirm('Close this session? It ends with no outcome; the item stays on Today.')) return;
-      const r = await api(`/api/sessions/${cur.id}/${a}`, { method: 'POST', body: '{}' });
+    if (a === 'sleep' || a === 'close' || a === 'save') {
+      if (a === 'close' && !confirm('Close this session? Nothing is saved to the vault. Its transcript stays on the Sessions page.')) return;
+      if (a === 'save' && !confirm('Save this session to the vault and close it?\n\nIt goes to projects/sessions/ as raw, word for word (credentials redacted). The next ingest folds it into the wiki.')) return;
+      const r = await api(`/api/sessions/${cur.id}/${a === 'sleep' ? 'sleep' : 'close'}`, { method: 'POST', body: JSON.stringify(a === 'save' ? { save: true } : {}) });
+      if (r.error) { alert(r.error); return; }
       if (r.session) cur = r.session;
       paintHeader(); onChange();
-      if (a === 'close') { hide(); onDone(cur); }
+      if (a === 'save' && r.saved) {
+        const sv = r.saved;
+        alert(sv.error ? `Closed, but not saved: ${sv.error}.`
+          : `Saved to ${sv.written.length ? sv.written.join(', ') : 'the vault (no change since the last save)'}${sv.secrets ? ` (${sv.secrets} credential(s) redacted)` : ''}. The next ingest folds it into the wiki.`);
+      }
+      if (a !== 'sleep') { hide(); onDone(cur); }
     }
   }
 

@@ -106,3 +106,24 @@ test('session deny rules: Edit rules for raw folders and watermarks', () => {
   for (const r of ['Edit(slack/**)', 'Edit(projects/**)', 'Edit(wiki/.last-ingest)', 'Bash(rm slack/*)']) assert.ok(deny.includes(r), r);
   assert.ok(!deny.some((r) => r.startsWith('Write(')), 'Write(path) rules are not matched by file checks');
 });
+
+test('rename and reorder: saved, kept across a restart, new sessions on top', () => {
+  const w = world();
+  w.mgr.stopAll(); clearInterval(w.mgr.timer);
+  const dir = path.join(w.vault, '.bot', 'sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  const rec = (id, at) => ({ id, sessionId: `00000000-0000-0000-0000-${id.padStart(12, '0')}`, title: `S ${id}`, kind: 'chat', state: 'asleep', createdAt: at, started: true });
+  fs.writeFileSync(path.join(dir, 'index.json'), JSON.stringify([rec('aaaaaaaaa1', 1), rec('aaaaaaaaa2', 2), rec('aaaaaaaaa3', 3)]));
+  const m = new Sessions({ vault: w.vault, stateDir: path.join(w.home, 'state'), claudeBin: FAKE });
+  live.push(m);
+  // Before `order` existed: newest first, as before.
+  assert.deepEqual(m.list().map((s) => s.id), ['aaaaaaaaa3', 'aaaaaaaaa2', 'aaaaaaaaa1']);
+  m.reorder(['aaaaaaaaa1', 'aaaaaaaaa3']);
+  assert.deepEqual(m.list().map((s) => s.id), ['aaaaaaaaa1', 'aaaaaaaaa3', 'aaaaaaaaa2']);
+  m.rename('aaaaaaaaa2', '  Shape   your wiki ');
+  assert.throws(() => m.rename('aaaaaaaaa2', '   '), /empty/);
+  clearInterval(m.timer);
+  const again = new Sessions({ vault: w.vault, stateDir: path.join(w.home, 'state'), claudeBin: FAKE });
+  live.push(again);
+  assert.deepEqual(again.list().map((s) => [s.id, s.title]), [['aaaaaaaaa1', 'S aaaaaaaaa1'], ['aaaaaaaaa3', 'S aaaaaaaaa3'], ['aaaaaaaaa2', 'Shape your wiki']]);
+});

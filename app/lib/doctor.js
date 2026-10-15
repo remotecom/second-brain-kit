@@ -136,6 +136,12 @@ function check(vault, { claudeBin } = {}) {
   const pty = ptyFacts();
   if (!pty.ok) add('warn', 'python:pty', `Sessions need python3 with pty: ${pty.why}.`, 'Run `xcode-select --install` in Terminal, then restart the app.', []);
 
+  // 6b. transcript retention: Claude Code's default deletes a project's
+  // transcripts (and, before the vault held them, its memories) after 30 days.
+  const ret = require('./retention').check();
+  if (!ret.ok) add('warn', 'claude:retention', ret.error ? `Cannot read ${ret.file}: ${ret.error}` : `Claude Code deletes transcripts after ${ret.days || 30} days (cleanupPeriodDays in ${ret.file}). Old sessions and their memories can vanish, and wiki links to them go dead.`,
+    ret.error ? 'Fix the JSON in that file, then press Repair.' : `Press Repair to set cleanupPeriodDays to ${require('./retention').KEEP_DAYS} (keeps them).`, [], { repair: !ret.error });
+
   // 7. per-source state
   const src = cfg.sources;
   if (src.linear.enabled && !fs.existsSync(path.join(vault, 'linear', '.initiative-scope.json'))) {
@@ -157,8 +163,11 @@ function blockers(findings, botId) {
 
 // Create what is missing, from the kit's templates. Never overwrites: every
 // write uses the 'wx' flag, so an existing file is left exactly as it is.
-function repair(vault) {
+// opts.retention: also set Claude Code's cleanupPeriodDays (a Mac-wide
+// setting, so only the app's Repair button asks for it; tests do not).
+function repair(vault, opts = {}) {
   const made = [];
+  if (opts.retention) { try { if (require('./retention').ensure() === 'set') made.push('cleanupPeriodDays in ~/.claude/settings.json'); } catch {} }
   for (const d of ['wiki', ...RAW_DIRS, '.bot', '.bot/runs', '.bot/state']) {
     const p = path.join(vault, d);
     if (!fs.existsSync(p)) { fs.mkdirSync(p, { recursive: true }); made.push(`${d}/`); }

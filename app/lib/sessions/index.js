@@ -11,7 +11,11 @@
 //     to sleep. sessions.idle_sleep_min with no input also sleeps it (P1).
 //     Asleep = process stopped, id kept; open again = `claude --resume <id>`.
 //   - Done (an outcome button, or Close): the transcript is copied to
-//     .bot/sessions/<id>.jsonl and kept sessions.keep_days days.
+//     .bot/sessions/<id>.jsonl and kept sessions.keep_days days (0 = always).
+//     "Save & close" also copies it to projects/sessions/ (lib/session-raw.js):
+//     raw, never deleted, picked up by the next ingest.
+//   - The owner can rename a session and drag it to a new place in the list
+//     (`order`: lower is higher up; a new session goes on top).
 //
 // Lifecycle:   open ──idle/evicted──▶ asleep ──open──▶ open ──outcome/close──▶ done
 
@@ -59,6 +63,7 @@ class Session {
       model: rec.model || 'sonnet', prompt: rec.prompt || '', outcomes: rec.outcomes || [], suggest: rec.suggest || null,
       state: rec.state || 'asleep', createdAt: rec.createdAt || Date.now(), lastInput: rec.lastInput || Date.now(),
       endedAt: rec.endedAt || null, outcome: rec.outcome || null, started: !!rec.started,
+      order: Number.isFinite(rec.order) ? rec.order : null, saved: Array.isArray(rec.saved) ? rec.saved : [],
     });
     this.pty = null;
     this.clients = new Set();
@@ -157,6 +162,7 @@ class Session {
       id: this.id, sessionId: this.sessionId, title: this.title, kind: this.kind, item: this.item, model: this.model,
       outcomes: this.outcomes, suggest: this.suggest, state: this.state, activity: this.activity, running: this.running,
       createdAt: this.createdAt, lastInput: this.lastInput, endedAt: this.endedAt, outcome: this.outcome, started: this.started,
+      order: this.order, saved: this.saved,
     };
   }
 }
@@ -173,6 +179,8 @@ class Sessions {
     try { recs = JSON.parse(fs.readFileSync(this.indexFile, 'utf8')); } catch {}
     // After an app restart nothing is running: open sessions are asleep.
     for (const r of recs) this.map.set(r.id, new Session(this, { ...r, state: r.state === 'open' ? 'asleep' : r.state }));
+    // Sessions from before `order` existed: newest first, as the list was.
+    [...this.map.values()].filter((x) => x.order === null).sort((a, b) => b.createdAt - a.createdAt).forEach((x, i) => { x.order = 1000 + i; });
     this.cleanup();
     this.timer = setInterval(() => this.tick(), 60000);
     if (this.timer.unref) this.timer.unref();
@@ -180,7 +188,7 @@ class Sessions {
 
   limits() {
     const s = getConfig(this.vault).sessions;
-    return { max: s.max_running, idleMs: s.idle_sleep_min * 60000, keepMs: s.keep_days * 864e5 };
+    return { max: s.max_running, idleMs: s.idle_sleep_min * 60000, keepMs: Number(s.keep_days) > 0 ? s.keep_days * 864e5 : 0 };
   }
 
   save() {
@@ -188,13 +196,34 @@ class Sessions {
     fs.writeFileSync(this.indexFile, JSON.stringify([...this.map.values()].map((s) => s.toJSON()), null, 2));
   }
 
-  list() { return [...this.map.values()].map((s) => s.toJSON()).sort((a, b) => b.createdAt - a.createdAt); }
+  // The owner's order (dragged in the nav), then newest first.
+  list() { return [...this.map.values()].map((s) => s.toJSON()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || b.createdAt - a.createdAt); }
   get(id) { return this.map.get(id); }
+
+  rename(id, title) {
+    const s = this.get(id);
+    if (!s) throw new Error('no such session');
+    const t = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (!t) throw new Error('the name is empty');
+    s.title = t;
+    this.save();
+    return s;
+  }
+
+  // ids: the new order of some or all sessions, top first. Sessions not named
+  // keep their place after the named ones.
+  reorder(ids) {
+    const want = (Array.isArray(ids) ? ids : []).map(String).filter((id) => this.map.has(id));
+    const rest = this.list().map((x) => x.id).filter((id) => !want.includes(id));
+    [...want, ...rest].forEach((id, i) => { this.map.get(id).order = i; });
+    this.save();
+  }
 
   // A new session. Starts it now (making room first).
   create({ title, kind, item, model, prompt, outcomes, suggest }) {
     const id = crypto.randomBytes(5).toString('hex');
-    const s = new Session(this, { id, sessionId: crypto.randomUUID(), title: String(title || 'Session').slice(0, 120), kind, item, model, prompt, outcomes, suggest, state: 'asleep' });
+    const top = Math.min(0, ...[...this.map.values()].map((x) => x.order ?? 0));
+    const s = new Session(this, { id, sessionId: crypto.randomUUID(), title: String(title || 'Session').slice(0, 120), kind, item, model, prompt, outcomes, suggest, state: 'asleep', order: top - 1 });
     this.map.set(id, s);
     this.open(id);
     return s;
@@ -243,7 +272,7 @@ class Sessions {
     const { keepMs } = this.limits();
     let changed = false;
     for (const s of [...this.map.values()]) {
-      if (s.state === 'done' && s.endedAt && Date.now() - s.endedAt > keepMs) {
+      if (keepMs && s.state === 'done' && s.endedAt && Date.now() - s.endedAt > keepMs) {
         try { fs.rmSync(path.join(this.dir, `${s.id}.jsonl`), { force: true }); } catch {}
         this.map.delete(s.id); changed = true;
       }

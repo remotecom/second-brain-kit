@@ -56,6 +56,9 @@ test('setup creates a working vault, settings and a login item', () => {
   // the Dock app (the Dock itself is skipped in test mode)
   assert.ok(fs.existsSync(path.join(home, 'Applications', 'Second Brain.app', 'Contents', 'MacOS', 'second-brain')), 'Dock app');
   assert.match(r.stdout, /✓ app: .*Second Brain\.app \(Dock skipped: test mode\)/);
+  // transcripts kept, memories bound (none in a new HOME)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).cleanupPeriodDays, 36500);
+  assert.match(r.stdout, /✓ project memories: nothing to bind/);
   assert.match(r.stdout, /Next: open http:\/\/localhost:19300/);
 });
 
@@ -131,4 +134,15 @@ test('the CLI has status and run, and deliberately no answer command (OV-a)', ()
   assert.match(h.stdout, /second-brain status/);
   assert.match(h.stdout, /second-brain run <bot>/);
   assert.match(run(home, ['run']).stderr, /which bot/);
+});
+
+test('a side install (SECOND_BRAIN_STATE_DIR) never touches the Mac: no Dock app, no binding, no retention', () => {
+  const home = fakeHome();
+  const env = { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, SECOND_BRAIN_NO_LAUNCHCTL: '1', SECOND_BRAIN_STATE_DIR: path.join(home, 'side-state') };
+  const r = spawnSync(process.execPath, [CLI, 'setup', '--vault', path.join(home, 'Side'), '--yes', '--no-login-item'], { env, encoding: 'utf8', timeout: 60000 });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /side install/);
+  assert.ok(!fs.existsSync(path.join(home, 'Applications')), 'no Dock app');
+  assert.ok(!fs.existsSync(path.join(home, '.claude', 'settings.json')), 'retention untouched');
+  assert.ok(!/project memories/.test(r.stdout), 'no binding');
 });

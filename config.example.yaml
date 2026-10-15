@@ -141,7 +141,11 @@ usage_share: normal
 sessions:
   max_running: 4         # a 5th session puts the oldest idle one to sleep
   idle_sleep_min: 30     # a session with no input for this long goes to sleep
-  keep_days: 30          # transcripts of finished sessions are kept this long
+  keep_days: 0           # finished sessions stay in the list this long (0 = always)
+  # "Save & close" copies a session, verbatim, to projects/sessions/<day>-<id>.md
+  # (one file per day it ran; credentials redacted). Ingest picks it up like any
+  # other raw file. Plain Close saves nothing.
+  max_day_chars: 300000  # one saved session-day is cut at this many characters, and says so
 
 # Raw files the ingest skips, with the reason "excluded by config.yaml". The
 # files stay on disk (raw is immutable); only wiki synthesis skips them.
