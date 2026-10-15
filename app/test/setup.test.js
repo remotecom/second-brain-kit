@@ -53,6 +53,9 @@ test('setup creates a working vault, settings and a login item', () => {
   assert.ok(plist.includes(`<string>${fs.realpathSync(process.execPath)}</string>`), 'absolute node path');
   assert.ok(plist.includes(`<string>${vault}</string>`));
   assert.ok(!/\{\{/.test(plist));
+  // the Dock app (the Dock itself is skipped in test mode)
+  assert.ok(fs.existsSync(path.join(home, 'Applications', 'Second Brain.app', 'Contents', 'MacOS', 'second-brain')), 'Dock app');
+  assert.match(r.stdout, /✓ app: .*Second Brain\.app \(Dock skipped: test mode\)/);
   assert.match(r.stdout, /Next: open http:\/\/localhost:19300/);
 });
 

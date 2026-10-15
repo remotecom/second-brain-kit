@@ -18,6 +18,7 @@
 //   --port <n>          default 19300
 //   --no-login-item     do not install the LaunchAgent
 //   --no-obsidian       do not add the vault to Obsidian's vault list
+//   --no-dock-app       do not make ~/Applications/Second Brain.app or add it to the Dock
 //   --yes               accept defaults, ask nothing
 
 const fs = require('fs');
@@ -38,7 +39,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) { o._.push(a); continue; }
     const [k, v] = a.slice(2).split('=');
-    if (['yes', 'no-login-item', 'no-obsidian', 'write', 'wait', 'json', 'post'].includes(k)) o[k] = true;
+    if (['yes', 'no-login-item', 'no-obsidian', 'no-dock-app', 'write', 'wait', 'json', 'post'].includes(k)) o[k] = true;
     else o[k] = v !== undefined ? v : argv[++i];
   }
   return o;
@@ -197,6 +198,15 @@ async function setup(o) {
     if (!o['no-login-item']) {
       const li = installLoginItem(launchAgentPlist({ vault, port, node: nodePath(), claude: pre.claude }));
       out(`  ✓ login item: ${li.file}${li.loaded ? ' (started)' : process.env.SECOND_BRAIN_NO_LAUNCHCTL ? ' (not loaded: test mode)' : ` (NOT started: ${String(li.error || '').trim()})`}`);
+    }
+
+    if (!o['no-dock-app']) {
+      const D = require('./lib/dock-app');
+      try {
+        D.write(KIT_DIR);
+        const dock = D.addToDock();
+        out(`  ✓ app: ${D.appPath()}${dock === 'added' ? ' (added to the Dock)' : dock === 'already' ? ' (in the Dock)' : ` (Dock ${dock})`}`);
+      } catch (e) { out(`  ! app: ${e.message}. Open the app with ${path.join(KIT_DIR, 'app', 'bin', 'second-brain')}`); }
     }
 
     const doctor = require('./lib/doctor');
@@ -391,6 +401,11 @@ function postUpdate(vault, write) {
   const kb = KB.update(vault, { write });
   if (kb.status === 'edited-inside') steps.push(`CLAUDE.md: NOT updated: ${kb.reason}`);
   else if (kb.status !== 'unchanged') steps.push(`CLAUDE.md: kit block ${kb.status} (${kb.diff.split('\n').filter(Boolean).length} line(s) differ)`);
+  // The Dock app runs this kit's launcher: rewrite it so it follows the kit.
+  // An update never touches the Dock itself; setup adds it once.
+  const D = require('./lib/dock-app');
+  if (!fs.existsSync(D.appPath())) steps.push(`app: ${D.appPath()} (new; drag it to the Dock)`);
+  if (write) { try { D.write(KIT_DIR); } catch (e) { steps.push(`app: NOT written: ${e.message}`); } }
   return { steps, kitBlock: kb.status };
 }
 

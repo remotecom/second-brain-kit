@@ -10,8 +10,8 @@
 #   4. The claude.ai login: opens your browser; you log in.
 #   5. Obsidian, for the graph view (optional; it asks first).
 #   6. The kit: clones it, or pulls it when it is already there.
-#   7. second-brain setup: the vault, the login item, the checks, and the
-#      vault added to Obsidian's vault list.
+#   7. second-brain setup: the vault, the login item, the Dock app, the checks,
+#      and the vault added to Obsidian's vault list.
 #   8. Opens the Setup page. Connect your sources there (step 1).
 #
 # Options (environment variables):
@@ -188,7 +188,7 @@ main() {
   say "Done. Two things are left, both on the Setup page:"
   printf '  1. In claude.ai → Settings → Connectors, connect Slack, Linear, Notion,\n     Google Calendar and Google Drive. Step 1 of the Setup page tests them.\n'
   printf '  2. Follow the steps to the first run and the wiki shape (about 15 minutes).\n'
-  printf '\n  The app: http://localhost:%s\n  Open it again any time: %s\n' "$PORT" "$KIT/app/bin/second-brain"
+  printf '\n  The app: http://localhost:%s\n  Open it again any time: the Second Brain icon in your Dock\n  (or ~/Applications/Second Brain.app, or %s)\n' "$PORT" "$KIT/app/bin/second-brain"
 }
 
 main "$@"
