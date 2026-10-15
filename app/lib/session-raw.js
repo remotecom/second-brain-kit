@@ -30,10 +30,14 @@ const encode = (p) => p.replace(/[^a-zA-Z0-9]/g, '-');
 // Claude Code files a transcript under its cwd with every non-alphanumeric
 // char turned into '-'. The cwd can be the resolved path (/private/var/… for
 // /var/…), so look under both spellings.
-function transcriptFile(vault, sessionId, home = os.homedir()) {
+function transcriptDirs(vault, home = os.homedir()) {
   let real = vault; try { real = fs.realpathSync(vault); } catch {}
-  for (const d of [...new Set([vault, real])]) {
-    const f = path.join(home, '.claude', 'projects', encode(d), `${sessionId}.jsonl`);
+  return [...new Set([vault, real].map((d) => path.join(home, '.claude', 'projects', encode(d))))];
+}
+
+function transcriptFile(vault, sessionId, home = os.homedir()) {
+  for (const d of transcriptDirs(vault, home)) {
+    const f = path.join(d, `${sessionId}.jsonl`);
     if (fs.existsSync(f)) return f;
   }
   return null;
@@ -127,4 +131,4 @@ function saveSession(vault, s, { home } = {}) {
   return res;
 }
 
-module.exports = { DIR, saveSession, readTurns, transcriptFile, render };
+module.exports = { DIR, saveSession, readTurns, transcriptFile, transcriptDirs, render };

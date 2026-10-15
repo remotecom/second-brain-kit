@@ -35,6 +35,7 @@ const { dayOf } = require('./time');
 const { route, groupParts } = require('./route');
 const { linearTiers } = require('./tiers');
 const { addToIndex } = require('./wiki-index');
+const botTranscripts = require('./bot-transcripts');
 
 const PART_BUDGET = 3;      // $ per part (one claude -p call + its retry)
 const RUN_BUDGET = 40;      // $ for the whole run; stop starting parts past this
@@ -419,6 +420,7 @@ async function runPart(ctx, part, k, n) {
   // without. persist: the session must survive for the repair --resume.
   const opts = (prompt, resume) => ({ prompt, model: 'sonnet', resume, persist: true, allowed: tools, budget: PART_BUDGET });
   let calls = 0;
+  const sessions = new Set(); // this part's transcripts, deleted once it passes
   const call = async (prompt, resume) => {
     const texts = [];
     const r = await claudeCall({ claudeBin, vault, env }, {
@@ -431,6 +433,7 @@ async function runPart(ctx, part, k, n) {
         }
       },
     });
+    if (r.result && r.result.session_id) sessions.add(r.result.session_id);
     return { r, texts };
   };
 
@@ -477,6 +480,7 @@ async function runPart(ctx, part, k, n) {
       fs.writeFileSync(path.join(vault, rel), stamped);
     }
     const skips = part.entries.filter((e) => mf.entries[e.id] && mf.entries[e.id].skip).length;
+    try { botTranscripts.remove(vault, [...sessions]); } catch {}
     logLine(run, `  ✓ part ${k}: ${pages.size} page(s) written, ${part.entries.length - skips} entries folded, ${skips} judged empty · ${calls} tool calls · $${cost.toFixed(2)}`);
     return { ok: true, cost, pages: [...pages.keys()], mf, part };
   });
@@ -488,6 +492,8 @@ async function runIngest(run, { claudeBin, vault, env, logLine, finish, latestFo
   const startMs = Date.now();
   const startIso = new Date(startMs).toISOString().replace(/\.\d+Z$/, 'Z');
   const date = dayOf(startMs, getConfig(vault).owner.timezone);
+  // Transcripts of parts that failed more than two weeks ago (see bot-transcripts.js).
+  try { const sw = botTranscripts.sweep(vault); if (sw.deleted) logLine(run, `deleted ${sw.deleted} old ingest transcript(s) (${Math.round(sw.bytes / 1e6)} MB)`); } catch {}
   const ownerName = readOwner(vault).name || 'the owner';
 
   // Held sources: their latest sync failed, so their files wait (ledger).
