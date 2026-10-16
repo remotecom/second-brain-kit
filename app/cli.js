@@ -179,9 +179,14 @@ async function setup(o) {
     const vault = tilde(o.vault || await ask(rl, '\nVault folder (your private notes; created if missing)', current || path.join(os.homedir(), 'SecondBrain')));
     if (!vault || (!o.vault && !rl && !current)) fail('pass --vault <dir> (there is no default vault).');
     if (vault.startsWith(KIT_DIR + path.sep) || vault === KIT_DIR) fail('the vault must not be inside the kit folder (the kit is public code).');
-    const name = o.name || await ask(rl, 'Your name', (spawnSync('/usr/bin/id', ['-F'], { encoding: 'utf8' }).stdout || '').trim());
-    const email = o.email || await ask(rl, 'Your work email', pre.auth && pre.auth.email);
-    const slackUserId = o['slack-user-id'] || await ask(rl, 'Your Slack member ID (Slack profile → More → Copy member ID; blank = later)', '');
+    // Name and email come from this Mac and the claude.ai login; ask only when
+    // one is missing. The Slack member ID is never asked here: the Setup
+    // page's "Look me up" (step 2) finds it through the Slack connector.
+    const macName = (spawnSync('/usr/bin/id', ['-F'], { encoding: 'utf8' }).stdout || '').trim();
+    const name = o.name || (macName || await ask(rl, 'Your name', ''));
+    const email = o.email || ((pre.auth && pre.auth.email) || await ask(rl, 'Your work email', ''));
+    const slackUserId = o['slack-user-id'] || '';
+    out(`  ✓ you: ${name || '(name: set it on the Setup page)'}, ${email || '(email: set it on the Setup page)'}. The Setup page finds your Slack and Notion IDs.`);
     const timezone = o.timezone || require('./lib/config').localZone();
     const port = Number(o.port || install.port());
 

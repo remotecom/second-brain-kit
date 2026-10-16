@@ -46,8 +46,6 @@ Have these ready. They save you time on the Setup page.
 - **Your sources, connected in claude.ai.** Open claude.ai → Settings →
   Connectors. Connect the ones you want: Slack, Linear, Notion, Google
   Calendar and Google Drive.
-- **Your Slack member ID.** In Slack, open your profile → **⋮ More** →
-  **Copy member ID**. It starts with `U`.
 - **Your Linear scope** (only if you use Linear): one initiative or one team
   key, such as `ENG`.
 
@@ -68,7 +66,9 @@ these things yourself when it asks:
 3. Log in with your claude.ai account when the browser opens.
 4. Answer **Y** or **n** to "Install Obsidian?" (optional; it shows the
    wiki as a graph).
-5. Type your name, your work email and your Slack member ID.
+
+It takes your name from this Mac and your email from the claude.ai login.
+You do not need your Slack ID: the Setup page finds it.
 
 At the end, the app opens on its **Setup** page. A **Second Brain** icon is
 now in your Dock. The app also starts by itself when you log in.
@@ -87,7 +87,7 @@ Do them in order. Each step shows **done** when it is complete.
 | Step | What you do |
 |---|---|
 | 1. Connectors | Press **Find my connectors**. Each source shows `ok`, or the fix. Press **Save**. |
-| 2. You | Press **Look me up**, check your name, email and Slack ID, and press **Save**. The syncs use them to find your own messages, pages and issues. |
+| 2. You | Press **Look me up**. It finds your Slack and Notion IDs from your email. Check them and press **Save**. The syncs use them to find your own messages, pages and issues. |
 | 3. Linear scope | Press **Load from Linear**. Pick one initiative (with all its sub-projects) or one team. |
 | 4. Privacy | Press **Show the preview**. Tick the calendars and the Drive folders to sync. Start with your own work calendar only. Nothing syncs before you save. |
 | 5. Schedule | Pick the time for the daily Morning run. |

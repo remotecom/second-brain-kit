@@ -197,3 +197,15 @@ test('a side install (SECOND_BRAIN_STATE_DIR) never touches the Mac: no Dock app
   assert.ok(!fs.existsSync(path.join(home, '.claude', 'settings.json')), 'retention untouched');
   assert.ok(!/project memories/.test(r.stdout), 'no binding');
 });
+
+test('setup never asks for the Slack ID: the Setup page finds it', () => {
+  const home = fakeHome();
+  const vault = path.join(home, 'Brain');
+  const r = run(home, ['setup', '--vault', vault, '--yes', '--no-login-item']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /Slack member ID/);
+  assert.match(r.stdout, /The Setup page finds your Slack and Notion IDs/);
+  const cfg = yaml.load(fs.readFileSync(path.join(vault, 'config.yaml'), 'utf8'));
+  assert.equal(cfg.owner.email, 'sam@example.com');
+  assert.match(cfg.owner.slack_user_id, /X{4,}/, 'a placeholder until Look me up fills it');
+});

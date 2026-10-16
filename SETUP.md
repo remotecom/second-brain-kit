@@ -33,8 +33,10 @@ git clone https://github.com/remotecom/second-brain-kit.git ~/second-brain-kit
 ~/second-brain-kit/app/bin/second-brain setup --vault ~/SecondBrain
 ```
 
-Setup asks for your name, work email and Slack member ID (Slack → your
-profile → *More* → *Copy member ID*). Then it:
+Setup takes your name from this Mac and your email from the claude.ai login
+(it asks only when one is missing). It does not ask for your Slack ID: the
+Setup page's **Look me up** (step 2, You) finds your Slack and Notion IDs.
+Then it:
 
 1. checks macOS, Node and the Claude Code login,
 2. creates the vault folder: raw source folders, an empty wiki, `config.yaml`,
