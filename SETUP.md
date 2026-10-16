@@ -64,7 +64,8 @@ Turn a source off with `enabled: false` under `sources.<name>` in
 
 ## 3. Set your scope
 
-Edit `config.yaml` in the vault (every key is explained in the kit's
+The Setup page sets the main scope for you: step 3 (Linear scope) and step 4
+(Privacy: calendars and Drive folders). To change more, edit `config.yaml` in the vault (every key is explained in the kit's
 `config.example.yaml`):
 
 - `sources.linear.scope`: ONE of `initiative` (a Linear initiative ID; its
