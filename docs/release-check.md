@@ -122,6 +122,8 @@ week), say so in the PR: the default share, or the run, needs to change.
 - [ ] **Bring this in** opens a session that names the note's commits; it
       ports, tests, keeps the note with `ported_from`, and Apply works; the
       feature then shows as **you have it**
+- [ ] `bash tests/evals/port-duplicate.sh` passes (about $0.30): a port
+      session names a duplicate the copy already has and asks first
 
 ## 7. The gate to teammate #2 (OV8)
 
