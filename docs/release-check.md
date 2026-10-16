@@ -99,6 +99,22 @@ week), say so in the PR: the default share, or the run, needs to change.
       running anything by hand
 - [ ] the next Morning run starts by itself at the set time
 
+## 6b. Make me better
+
+- [ ] **✦ Make me better** opens a session; the live kit is now on branch
+      `mine`, tracking the same upstream; `~/.second-brain/kit-dev` exists
+- [ ] `second-brain update` still fast-forwards while the copy has no
+      commits of its own
+- [ ] ask for a rule-breaking change ("rewrite wiki pages on ingest"): the
+      session objects with `ingest-contract` and changes no file
+- [ ] ask for a small page change; it builds, tests and commits; **Apply**
+      shows each step in the log, the app restarts, the page reloads and says
+      "Apply worked"
+- [ ] commit a change that stops the server from starting (in the dev copy);
+      **Apply** stops at the smoke start, nothing switches
+- [ ] **Undo last Apply** goes back; the page says "Undo worked"
+- [ ] `bash tests/evals/improve-objections.sh` passes 5/5 (about $0.50)
+
 ## 7. The gate to teammate #2 (OV8)
 
 - [ ] teammate #1 has a clean `second-brain doctor`

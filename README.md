@@ -99,6 +99,22 @@ same for everyone. Only two things are per-function, both in `config.yaml`:
   (services / runbooks / postmortems), BizOps (accounts / processes / vendors),
   PM (features / personas / experiments), etc.
 
+### Change the app itself: Make me better
+
+Press **✦ Make me better** in the app. A Claude session opens on your own
+copy of the kit, with the kit's rules (`PRINCIPLES.md`) and recipes
+(`docs/framework/`) loaded. It plans with you first and objects, by rule id,
+to a change that would break a rule, then offers the nearest version that
+keeps it. It builds and tests in a separate dev copy; nothing reaches the
+running app until you press **Apply**. Apply runs the tests, starts the new
+code on the side, switches over, and goes back by itself if the app does not
+come back. **Undo last Apply** (or `second-brain rollback` in Terminal) goes
+back one step.
+
+Your changes are yours: nobody reviews them. Once your copy has changes of
+its own, `update` no longer pulls; new upstream work is brought in on
+purpose.
+
 ## The honest part
 
 Day one, this is empty and unimpressive — you're just syncing. The value

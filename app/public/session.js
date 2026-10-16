@@ -8,6 +8,7 @@
   let cur = null;      // the session record
   let term = null, fit = null, ws = null;
   let suggested = '';
+  let applying = false;
   const TOKEN = window.BRAIN_TOKEN;
   const strip = (t) => t.replace(/\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07/g, '');
 
@@ -29,13 +30,17 @@
     return `<header>
       <div class="sp-title"><span class="dot ${s.running ? 'running' : 'never'}"></span><b class="sp-name" data-sp="rename" title="Rename">${esc(s.title)}</b> <span class="muted">${esc(s.model)} · ${esc(s.state)}</span></div>
       <span class="spacer"></span>
-      ${s.state === 'done' ? '' : `<button class="ghost small" data-sp="sleep" title="Stop the process; keep the session to continue later">Sleep</button>
+      ${s.state === 'done' ? '' : s.kind === 'improve' ? `<button class="small ${applying ? 'ghost' : ''}" data-sp="apply" ${applying ? 'disabled' : ''} title="Test this change, then switch the app to it. If the app does not come back, it goes back by itself.">${applying ? 'Applying…' : 'Apply'}</button>
+      <button class="ghost small" data-sp="discard" title="Throw away the changes the app does not run yet">Discard</button>
+      <button class="ghost small" data-sp="undo" title="Go back to the version before the last Apply">Undo last Apply</button>
+      <button class="ghost small" data-sp="sleep" title="Stop the process; keep the session to continue later">Sleep</button>
+      <button class="ghost small" data-sp="close" title="End the session. The dev copy keeps its work.">Close</button>` : `<button class="ghost small" data-sp="sleep" title="Stop the process; keep the session to continue later">Sleep</button>
       <button class="ghost small" data-sp="close" title="End the session. Nothing is saved to the vault.">Close</button>
       <button class="ghost small" data-sp="save" title="End the session and save it to the vault (projects/sessions/). The next ingest picks it up.">Save &amp; close</button>`}
       <button class="ghost small" data-sp="hide" title="Hide the panel; the session keeps running (a tab on the right brings it back)">Hide ▸</button>
     </header>
     ${s.state === 'done' ? `<div class="sp-done">✓ Done: ${esc(s.outcome || 'closed')}. ${s.summary ? esc(s.summary) + '. This panel closes in a moment.' : 'Its transcript is on the Sessions page.'}</div>`
-      : `${outs ? `<div class="sp-outcomes"><span class="muted">Outcome:</span> ${outs}</div>` : ''}<div class="sp-hint muted">First time in this vault, Claude asks if you trust the folder: pick "Yes, I trust this folder". Drag the left edge to resize.</div>`}`;
+      : `${outs ? `<div class="sp-outcomes"><span class="muted">Outcome:</span> ${outs}</div>` : ''}<div class="sp-hint muted">${s.kind === 'improve' ? 'This session works in your own copy of the app, not in the app you use. Nothing changes until you press Apply. The first time, Claude asks if you trust the folder: pick "Yes, I trust this folder".' : 'First time in this vault, Claude asks if you trust the folder: pick "Yes, I trust this folder".'} Drag the left edge to resize.</div>`}`;
   }
 
   function paintHeader() {
@@ -132,6 +137,7 @@
     }
     const a = t.dataset.sp;
     if (a === 'hide') return hide();
+    if (a === 'apply' || a === 'discard' || a === 'undo') return improveAction(a);
     if (a === 'sleep' || a === 'close' || a === 'save') {
       if (a === 'close' && !confirm('Close this session? Nothing is saved to the vault. Its transcript stays on the Sessions page.')) return;
       if (a === 'save' && !confirm('Save this session to the vault and close it?\n\nIt goes to projects/sessions/ as raw, word for word (credentials redacted). The next ingest folds it into the wiki.')) return;
@@ -146,6 +152,49 @@
       }
       if (a !== 'sleep') { hide(); onDone(cur); }
     }
+  }
+
+  // Make me better: the app (not the model) applies, discards and undoes.
+  async function improveAction(a) {
+    if (a === 'discard') {
+      if (!confirm('Throw away every change in the dev copy that the app does not run yet? This cannot be undone.')) return;
+      const r = await api('/api/improve/discard', { method: 'POST', body: '{}' });
+      return alert(r.error ? r.error : `Discarded ${r.discarded} change(s). The dev copy matches the app again.`);
+    }
+    if (a === 'undo') {
+      if (!confirm('Go back to the version before the last Apply? The app restarts.')) return;
+      const r = await api('/api/improve/undo', { method: 'POST', body: '{}' });
+      if (r.error || r.status === 'error') return alert(r.error || r.summary);
+      return waitForRestart(r.summary);
+    }
+    if (!confirm('Apply this change? The app runs the tests and starts the new code on the side first (about 2-4 minutes; the log shows each step). Then it switches over and restarts.')) return;
+    applying = true; paintHeader(); onChange(true);
+    let r = await api('/api/improve/apply', { method: 'POST', body: '{}' });
+    if (r.status === 'confirm') {
+      const lines = [
+        'This change touches the guard rails. Check these before you go on.',
+        ...(r.guards.length ? ['', 'Rules, tests or safety code it changes:', ...r.guards.map((g) => `  • ${g}`)] : []),
+        ...(r.trustedFailures.length ? ['', 'Tests your app trusted until now that fail with this change:', ...r.trustedFailures.map((g) => `  • ${g}`)] : []),
+        '', 'Apply anyway?',
+      ];
+      if (!confirm(lines.join('\n'))) { applying = false; paintHeader(); return; }
+      r = await api('/api/improve/apply', { method: 'POST', body: JSON.stringify({ confirm: r.sha }) });
+    }
+    applying = false; paintHeader();
+    if (r.error || r.status === 'error') return alert(`${r.error || r.summary}${r.failures && r.failures.length ? `\n\n${r.failures.slice(0, 12).join('\n')}` : ''}`);
+    if (r.status === 'switching') return waitForRestart(r.summary);
+  }
+
+  // The app restarts on the new code: wait for a new process, then reload.
+  async function waitForRestart(msg) {
+    alert(`${msg}\n\nThis page reloads when the app is back.`);
+    let first = null;
+    try { first = (await (await fetch('/alive')).json()).startedAt; } catch {}
+    for (let i = 0; i < 90; i++) {
+      await new Promise((res) => setTimeout(res, 2000));
+      try { const j = await (await fetch('/alive')).json(); if (j.startedAt !== first && j.brain) return location.reload(); } catch {}
+    }
+    location.reload();
   }
 
   function hide() {
@@ -193,7 +242,19 @@
   }
 
   window.SessionPanel = {
-    init(o) { api = o.api; esc = o.esc; onChange = o.onChange || (() => {}); onDone = o.onDone || (() => {}); },
+    init(o) {
+      api = o.api; esc = o.esc; onChange = o.onChange || (() => {}); onDone = o.onDone || (() => {});
+      // After a restart: say once how the last Apply or Undo ended.
+      api('/api/improve').then((st) => {
+        const l = st && st.last;
+        if (!l || !l.mode || l.state === 'switching') return;
+        let seen = ''; try { seen = localStorage.getItem('brain.applySeen') || ''; } catch {}
+        if (seen === l.at) return;
+        try { localStorage.setItem('brain.applySeen', l.at); } catch {}
+        if (l.state === 'rolled-back') alert(`The last ${l.mode === 'undo' ? 'Undo' : 'Apply'} did not work, so the app went back to ${String(l.from).slice(0, 7)}.\n\nWhy: ${l.reason}\n\nYour change is still in the dev copy. Open Make me better to fix it.`);
+        else if (l.state === 'applied') alert(`${l.mode === 'undo' ? 'Undo' : 'Apply'} worked: the app now runs ${String(l.to).slice(0, 7)}.`);
+      }).catch(() => {});
+    },
     // Start (or reopen) the session for an item. The server builds it.
     async start(kind, item, model) {
       const r = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ kind, item, model }) });

@@ -152,6 +152,7 @@
     for (const s of live.slice(0, 8)) html += `<div class="nav-item child" draggable="true" data-session="${esc(s.id)}" title="Drag to move · double-click to rename"><span class="dot ${s.running ? 'running' : 'never'}"></span><span class="lbl">${esc(s.title)}</span></div>`;
     const needsSetup = setup.some((f) => f.level === 'error');
     html += `<div class="nav-foot">
+      <div class="nav-item" data-improve title="Change your own copy of this app, guided by its rules"><span class="lbl">✦ Make me better</span></div>
       <div class="nav-item ${sel === 'setup' ? 'sel' : ''}" data-sel="setup"><span class="lbl">Setup</span>${needsSetup ? '<span class="badge">!</span>' : ''}</div>
       <a class="nav-item" href="obsidian://open?vault=${encodeURIComponent(vaultName)}"><span class="lbl">Open in Obsidian ↗</span></a></div>`;
     // A redraw mid-drag would drop the item being dragged: wait for the drop.
@@ -542,6 +543,12 @@
     }
     const rn = t.closest('[data-rename]');
     if (rn) return renameSession(rn.dataset.rename);
+    if (t.closest('[data-improve]')) {
+      const r = await api('/api/improve/open', { method: 'POST', body: '{}' });
+      if (r.error) return alert(`Make me better could not start: ${r.error}`);
+      load();
+      return window.SessionPanel.openId(r.session.id);
+    }
     const so = t.closest('[data-session]');
     if (so) return window.SessionPanel.openId(so.dataset.session);
     const tx = t.closest('[data-transcript]');

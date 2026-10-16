@@ -102,6 +102,43 @@ test('the server without a vault serves the not-set-up page', async () => {
   } finally { s.kill(); }
 });
 
+// Make me better's Apply polls /alive: no token, no setup needed, and it
+// must say whether the brain is up. /api/* still needs the token.
+async function serve(home, extraEnv = {}) {
+  const port = 19400 + Math.floor(Math.random() * 500);
+  const { spawn } = require('child_process');
+  const s = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env: { PATH: `${path.join(home, '.local', 'bin')}:/usr/bin:/bin`, HOME: home, SECOND_BRAIN_PORT: String(port), SECOND_BRAIN_NO_LAUNCHCTL: '1', ...extraEnv }, stdio: 'pipe' });
+  await new Promise((res, rej) => { s.stdout.on('data', (d) => /Second Brain on/.test(d) && res()); s.on('exit', (c) => rej(new Error(`server exited ${c}`))); });
+  return { s, base: `http://127.0.0.1:${port}` };
+}
+
+test('/alive answers without a token; /api/* still refuses without one', async () => {
+  const home = fakeHome();
+  const { s, base } = await serve(home);
+  try {
+    const a = await (await fetch(`${base}/alive`)).json();
+    const head = spawnSync('/usr/bin/git', ['-C', path.join(__dirname, '..', '..'), 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(a.ok, true);
+    assert.equal(a.sha, head);
+    assert.equal(a.brain, false, 'no vault: the brain never loaded');
+    assert.ok(Date.parse(a.startedAt));
+    assert.equal((await fetch(`${base}/api/runs`)).status, 401);
+  } finally { s.kill(); }
+});
+
+test('/alive says brain:true once a vault loads; NO_SCHEDULE starts no bot', async () => {
+  const home = fakeHome();
+  const vault = path.join(home, 'Brain');
+  assert.equal(run(home, ['setup', '--vault', vault, '--yes', '--name', 'Sam', '--no-login-item']).status, 0);
+  const { s, base } = await serve(home, { SECOND_BRAIN_NO_SCHEDULE: '1' });
+  try {
+    const a = await (await fetch(`${base}/alive`)).json();
+    assert.equal(a.brain, true);
+    const b = await (await fetch(`${base}/alive`)).json();
+    assert.equal(b.startedAt, a.startedAt, 'same process across polls');
+  } finally { s.kill(); }
+});
+
 test('setup on an existing vault adds no skeleton files to it', () => {
   const home = fakeHome();
   const vault = path.join(home, 'Old');

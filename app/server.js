@@ -49,6 +49,19 @@ const ALLOWED = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`]
 
 const CLAUDE = install.findClaude();
 
+// /alive: what Apply and its runner poll to see that the new code runs.
+// No token and no setup check: the poller has no token, and a smoke-start
+// server has a temp vault. It says only which commit runs, whether the
+// brain loaded and started, and when this process started. Same pid and
+// startedAt over several polls means it stayed up (launchd restarts a
+// crashing app every 30 s, which changes startedAt).
+const STARTED_AT = new Date().toISOString();
+let brainUp = false;
+const SHA = (() => {
+  const r = require('child_process').spawnSync('/usr/bin/git', ['-C', path.join(__dirname, '..'), '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+  return r.status === 0 ? r.stdout.trim() : null;
+})();
+
 const json = (res, code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
 const readBody = (req) => new Promise((resolve) => {
   let b = '';
@@ -63,6 +76,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const origin = req.headers.origin;
   if (origin && !ALLOWED.has(origin)) { res.writeHead(403); return res.end('cross-origin request refused'); }
+  if (url.pathname === '/alive' && req.method === 'GET') return json(res, 200, { ok: true, sha: SHA, brain: brainUp, startedAt: STARTED_AT, pid: process.pid });
   if (url.pathname.startsWith('/api/') && (req.headers['x-brain-token'] || '') !== TOKEN) { res.writeHead(401); return res.end('missing or bad token'); }
   try {
     if (!brain && url.pathname.startsWith('/api/')) return json(res, 503, { error: 'not set up', fix: 'Run `second-brain setup` in Terminal.' });
@@ -106,5 +120,5 @@ server.on('error', (e) => {
 });
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Second Brain on http://localhost:${PORT}  (vault=${VAULT || 'NOT SET UP'}, claude=${CLAUDE || 'MISSING'})`);
-  if (brain) brain.start(CLAUDE);
+  if (brain) { brain.start(CLAUDE); brainUp = true; }
 });

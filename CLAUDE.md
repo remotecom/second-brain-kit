@@ -19,8 +19,19 @@ app. It is **public**. Each person's vault (raw sources, wiki, `config.yaml`,
 - `templates/` — other starter files (wiki index and log, page template).
 - `config.example.yaml` — the config schema: every key, its default, why.
 - `tests/run.sh` — the whole test suite (bash checks + `node --test app/test`).
+- `tests/evals/` — checks that call the real model (not in `run.sh`): run by
+  hand and in the release check.
+- Make me better: `app/lib/improve.js` (the session), `app/lib/apply.js`
+  (the gate: tests, smoke start, guard-file confirm), `app/lib/apply-runner.js`
+  (switch + rollback, runs detached from a snapshot), `app/lib/kit-git.js`
+  (every git command on the kit, hooks off), `app/lib/apply-state.js`
+  (`apply.json` and the lock shared with `update`).
 
 ## Rules for changes
+
+The full list, each with its reason and its check, is `PRINCIPLES.md`. The
+recipes for the usual kinds of change are in `docs/framework/`. The short
+form:
 
 - **No private names in anything committed.** No partner, customer, internal
   channel or person names, not even in comments or examples. Use generic ones

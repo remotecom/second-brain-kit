@@ -83,6 +83,12 @@ const BUTTON_SYNCS = { slack: syncSlackMcp, linear: syncLinearMcp, notion: syncN
 // No default vault: `second-brain setup` records it (lib/install.js).
 const VAULT = resolveVault();
 const STATE_DIR = INSTALL_STATE_DIR;
+const KIT_DIR = path.resolve(__dirname, '..', '..');
+// Where Apply and Undo switch the code, and how the app restarts.
+function applyCtx() {
+  const install = require('./install');
+  return { kit: KIT_DIR, stateDir: STATE_DIR, node: process.execPath, port: install.port(), restart: require('./apply').restartSpec() };
+}
 // A neutral folder for calls that need no vault (the health probe).
 const CHAT_CWD = path.join(STATE_DIR, 'brain-cwd');
 const RUNS_DIR = path.join(VAULT, '.bot', 'runs');
@@ -222,19 +228,26 @@ function checkUpdate() {
 
 function start(claudeBin) {
   CLAUDE_BIN = claudeBin;
-  setTimeout(checkUpdate, 60000).unref();
-  setInterval(checkUpdate, 6 * 3600e3).unref();
+  // A smoke start (Make me better's Apply) runs this code on a spare port
+  // with a temp vault: no bot, no update check, nothing scheduled.
+  const noSchedule = !!process.env.SECOND_BRAIN_NO_SCHEDULE;
+  if (!noSchedule) {
+    setTimeout(checkUpdate, 60000).unref();
+    setInterval(checkUpdate, 6 * 3600e3).unref();
+  }
   heartbeat();
   setInterval(heartbeat, 60000).unref();
   if (claudeBin) SESSIONS = new Sessions({ vault: VAULT, stateDir: STATE_DIR, claudeBin });
   for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { if (SESSIONS) SESSIONS.stopAll(); releaseLock(); process.exit(0); });
   process.once('exit', releaseLock);
   for (const f of doctorNow(true)) if (f.level !== 'info') console.log(`doctor ${f.level}: ${f.message}${f.fix ? ` Fix: ${f.fix}` : ''}`);
-  if (!claudeBin) return;
+  if (!claudeBin || noSchedule) return;
   startScheduler({
     vault: VAULT,
     startMorning: () => {
       if (isRunning('morning')) return;
+      // An Apply is switching the code; it may roll back within a minute.
+      if (require('./apply-state').switching(STATE_DIR)) return;
       // Blocked by setup: no run record every 5-minute tick; one log line a
       // day, and the Today page shows the issue. It runs once it is fixed.
       const blk = doctor.blockers(doctorNow(true), 'morning');
@@ -646,7 +659,7 @@ function botsView() {
 
 async function handle(req, res, url, { json, readBody, claudeBin }) {
   const p = url.pathname;
-  if (!p.startsWith('/api/brain/') && !p.startsWith('/api/setup') && !p.startsWith('/api/sessions') && p !== '/api/update') return false;
+  if (!p.startsWith('/api/brain/') && !p.startsWith('/api/setup') && !p.startsWith('/api/sessions') && !p.startsWith('/api/improve') && p !== '/api/update') return false;
 
 
   // A link clicked in the app. In a Chrome --app window, window.open (and
@@ -699,6 +712,42 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     } catch { return json(res, 404, { error: 'no transcript kept for this session' }), true; }
     return json(res, 200, { lines }), true;
   }
+  // --- Make me better: a session in the dev copy, and the gate (Apply,
+  // Discard, Undo) that is the only way its work reaches the running app.
+  if (p === '/api/improve' && req.method === 'GET') {
+    try { return json(res, 200, require('./improve').status(KIT_DIR, STATE_DIR)), true; } catch (e) { return json(res, 200, { error: e.message }), true; }
+  }
+  if (p === '/api/improve/open' && req.method === 'POST') {
+    if (!SESSIONS) return json(res, 500, { error: 'claude CLI not found' }), true;
+    // One dev copy, so one Make me better session at a time.
+    const cur = SESSIONS.list().find((x) => x.kind === 'improve' && x.state !== 'done');
+    try {
+      if (cur) return json(res, 200, { session: SESSIONS.open(cur.id).toJSON() }), true;
+      const b = await readBody(req);
+      const model = ['opus', 'sonnet', 'haiku'].includes(b.model) ? b.model : 'opus';
+      return json(res, 200, { session: SESSIONS.create({ ...require('./improve').spec(KIT_DIR, STATE_DIR, VAULT), model }).toJSON() }), true;
+    } catch (e) { return json(res, 400, { error: e.message }), true; }
+  }
+  if (p === '/api/improve/apply' && req.method === 'POST') {
+    const busy = [...runs.values()].find((r) => r.status === 'running');
+    if (busy) return json(res, 409, { error: `${busy.bot} is running; Apply after it ends` }), true;
+    const b = await readBody(req);
+    const run = newRun({ id: 'apply' });
+    logLine(run, 'Apply: checking the change before it reaches the app');
+    try {
+      const r = await require('./apply').apply({ ...applyCtx(), confirm: typeof b.confirm === 'string' ? b.confirm : null, log: (m) => logLine(run, m) });
+      finish(run, r.status === 'error' ? 'error' : r.status === 'confirm' ? 'warn' : 'ok', r.summary, r);
+      return json(res, 200, { ...r, runId: run.id }), true;
+    } catch (e) { failRun(run, e); return json(res, 500, { error: e.message }), true; }
+  }
+  if (p === '/api/improve/discard' && req.method === 'POST') {
+    try { return json(res, 200, require('./improve').discard(KIT_DIR, STATE_DIR)), true; } catch (e) { return json(res, 400, { error: e.message }), true; }
+  }
+  if (p === '/api/improve/undo' && req.method === 'POST') {
+    if ([...runs.values()].some((r) => r.status === 'running')) return json(res, 409, { error: 'a bot is running; Undo after it ends' }), true;
+    const r = require('./apply').undo(applyCtx());
+    return json(res, r.status === 'error' ? 400 : 200, r), true;
+  }
   // The owner's order of the list (dragged in the nav), top first.
   if (p === '/api/sessions/order' && req.method === 'POST') {
     if (!SESSIONS) return json(res, 500, { error: 'claude CLI not found' }), true;
@@ -720,6 +769,7 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
         s.finish(String(b.outcome || 'closed').slice(0, 80));
         // Save & close: the transcript goes to raw (projects/sessions/); the
         // next ingest picks it up. Nothing else starts here.
+        if (b.save && s.kind === 'improve') throw new Error('a Make me better session is about the app, not your work: it is not saved to the vault');
         if (b.save) {
           saved = require('./session-raw').saveSession(VAULT, s);
           if (!saved.error) { s.saved = [...new Set([...s.saved, ...saved.written])]; SESSIONS.save(); }

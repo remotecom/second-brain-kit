@@ -64,6 +64,9 @@ class Session {
       state: rec.state || 'asleep', createdAt: rec.createdAt || Date.now(), lastInput: rec.lastInput || Date.now(),
       endedAt: rec.endedAt || null, outcome: rec.outcome || null, started: !!rec.started,
       order: Number.isFinite(rec.order) ? rec.order : null, saved: Array.isArray(rec.saved) ? rec.saved : [],
+      // Where it runs and with which settings. Default: the vault and the
+      // kit's deny rules. Make me better runs in the dev copy, sandboxed.
+      cwd: rec.cwd || null, settings: rec.settings || null, env: rec.env || null,
     });
     this.pty = null;
     this.clients = new Set();
@@ -84,13 +87,15 @@ class Session {
     if (this.pty) return;
     if (!this.mgr.claudeBin) throw new Error('claude CLI not found');
     fs.writeFileSync(this.controlFile, JSON.stringify({ cols, rows }));
-    const args = ['--model', this.model, '--settings', this.mgr.settingsFile];
+    const args = ['--model', this.model, '--settings', this.settings || this.mgr.settingsFile];
     // First start: our own id, and the context typed in as the first message.
     // Later: resume that same id.
     if (this.started) args.push('--resume', this.sessionId);
     else { args.push('--session-id', this.sessionId); if (this.prompt) args.push(this.prompt); }
-    const env = { ...botEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor' };
-    this.pty = spawn(PYTHON, [PTY_WRAPPER, this.controlFile, this.mgr.claudeBin, ...args], { cwd: this.mgr.vault, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const env = { ...botEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor', ...(this.env || {}) };
+    // --resume finds the transcript by cwd, so a session always runs in the
+    // same folder it started in.
+    this.pty = spawn(PYTHON, [PTY_WRAPPER, this.controlFile, this.mgr.claudeBin, ...args], { cwd: this.cwd || this.mgr.vault, env, stdio: ['pipe', 'pipe', 'pipe'] });
     this.startedAt = Date.now();
     this.started = true;
     this.state = 'open';
@@ -162,7 +167,7 @@ class Session {
       id: this.id, sessionId: this.sessionId, title: this.title, kind: this.kind, item: this.item, model: this.model,
       outcomes: this.outcomes, suggest: this.suggest, state: this.state, activity: this.activity, running: this.running,
       createdAt: this.createdAt, lastInput: this.lastInput, endedAt: this.endedAt, outcome: this.outcome, started: this.started,
-      order: this.order, saved: this.saved,
+      order: this.order, saved: this.saved, cwd: this.cwd, settings: this.settings, env: this.env,
     };
   }
 }
@@ -220,10 +225,10 @@ class Sessions {
   }
 
   // A new session. Starts it now (making room first).
-  create({ title, kind, item, model, prompt, outcomes, suggest }) {
+  create({ title, kind, item, model, prompt, outcomes, suggest, cwd, settings, env }) {
     const id = crypto.randomBytes(5).toString('hex');
     const top = Math.min(0, ...[...this.map.values()].map((x) => x.order ?? 0));
-    const s = new Session(this, { id, sessionId: crypto.randomUUID(), title: String(title || 'Session').slice(0, 120), kind, item, model, prompt, outcomes, suggest, state: 'asleep', order: top - 1 });
+    const s = new Session(this, { id, sessionId: crypto.randomUUID(), title: String(title || 'Session').slice(0, 120), kind, item, model, prompt, outcomes, suggest, cwd, settings, env, state: 'asleep', order: top - 1 });
     this.map.set(id, s);
     this.open(id);
     return s;
@@ -255,17 +260,12 @@ class Sessions {
     this.cleanup();
   }
 
-  // Claude Code files a transcript under its cwd with every non-alphanumeric
-  // char turned into '-'. That cwd can be the resolved path (/private/var/…
-  // for /var/…), so try both spellings.
+  // Claude Code files a transcript under the session's cwd (the vault, or
+  // the dev copy for Make me better); session-raw.js knows the folder names.
   keepTranscript(s) {
-    let real = this.vault; try { real = fs.realpathSync(this.vault); } catch {}
-    for (const dir of [...new Set([this.vault, real])]) {
-      const src = path.join(os.homedir(), '.claude', 'projects', dir.replace(/[^a-zA-Z0-9]/g, '-'), `${s.sessionId}.jsonl`);
-      if (!fs.existsSync(src)) continue;
-      try { fs.mkdirSync(this.dir, { recursive: true }); fs.copyFileSync(src, path.join(this.dir, `${s.id}.jsonl`)); } catch {}
-      return;
-    }
+    const src = require('../session-raw').transcriptFile(s.cwd || this.vault, s.sessionId);
+    if (!src) return;
+    try { fs.mkdirSync(this.dir, { recursive: true }); fs.copyFileSync(src, path.join(this.dir, `${s.id}.jsonl`)); } catch {}
   }
 
   cleanup() {
@@ -287,7 +287,9 @@ class Sessions {
 // without the Command Line Tools (it would open Apple's install dialog).
 function ptyOk() {
   if (spawnSync('/usr/bin/xcode-select', ['-p'], { timeout: 5000 }).status !== 0) return false;
-  return spawnSync(PYTHON, ['-c', 'import pty'], { timeout: 10000 }).status === 0;
+  // Open one for real: a sandbox (Make me better runs the tests in one) can
+  // import pty but has no pty devices ("out of pty devices", measured).
+  return spawnSync(PYTHON, ['-c', 'import pty, os; m, s = pty.openpty(); os.close(m); os.close(s)'], { timeout: 10000 }).status === 0;
 }
 
 module.exports = { Sessions, Session, sessionSettings, ptyOk, PROMPT_RE };

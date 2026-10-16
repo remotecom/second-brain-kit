@@ -80,3 +80,6 @@ scratch/
 /linear/.initiative-scope.json
 /gdrive/.parent-cache.json
 /.obsidian/graph.json
+
+# Make me better: the dev copy's temp folder (TMPDIR inside the sandbox).
+.tmp/

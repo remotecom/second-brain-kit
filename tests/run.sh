@@ -307,10 +307,15 @@ sect "6. Name check (no private names in anything that would be committed)"
 # No denylist = skip, so a fresh clone's test run still passes.
 DENY="${SECOND_BRAIN_DENYLIST:-$HOME/.second-brain/denylist.txt}"
 if [ -f "$DENY" ]; then
-  DL=$(mktemp); grep -v '^#' "$DENY" | grep -v '^[[:space:]]*$' > "$DL"
-  hits=$(cd "$KIT" && git ls-files -co --exclude-standard -z | xargs -0 grep -wiIlF -f "$DL" 2>/dev/null | tr '\n' ' ')
-  rm -f "$DL"
-  is "no denylist term in committable files" "" "$hits"
+  # A temp file that cannot be made (a sandbox without a writable TMPDIR)
+  # must FAIL here: an empty term list matches nothing and looked like a pass.
+  if DL=$(mktemp 2>/dev/null) && grep -v '^#' "$DENY" | grep -v '^[[:space:]]*$' > "$DL" && [ -s "$DL" ]; then
+    hits=$(cd "$KIT" && git ls-files -co --exclude-standard -z | xargs -0 grep -wiIlF -f "$DL" 2>/dev/null | tr '\n' ' ')
+    rm -f "$DL"
+    is "no denylist term in committable files" "" "$hits"
+  else
+    is "the denylist loads into a temp file (TMPDIR writable, list not empty)" "yes" "no"
+  fi
 else
   printf '  skip name check (no denylist at %s)\n' "$DENY"
 fi
@@ -320,7 +325,9 @@ sect "7. App unit tests (node --test app/test)"
 # ===========================================================================
 NODE=$(command -v node || ls /opt/homebrew/bin/node /usr/local/bin/node 2>/dev/null | head -1)
 if [ -n "$NODE" ]; then
-  nt_out=$(cd "$KIT" && "$NODE" --test app/test/*.test.js 2>&1); nt_rc=$?
+  # A per-test limit: a hang (a sandbox without pty devices, a server that
+  # never answers) fails that test instead of stalling the whole run.
+  nt_out=$(cd "$KIT" && "$NODE" --test --test-timeout=180000 app/test/*.test.js 2>&1); nt_rc=$?
   is "node --test passes ($(printf '%s' "$nt_out" | grep -E '^ℹ pass' | tr -dc '0-9') tests)" "0" "$nt_rc"
   [ "$nt_rc" = 0 ] || printf '%s\n' "$nt_out" | grep -E '^not ok|✖|Error' | head -20
 else
@@ -332,6 +339,12 @@ sect "8. One-line installer (install.sh)"
 # ===========================================================================
 bash -n "$KIT/install.sh"; is "install.sh parses" "0" "$?"
 is "install.sh runs main on its last line (a cut-off download runs nothing)" 'main "$@"' "$(tail -1 "$KIT/install.sh")"
+if [ -n "${SECOND_BRAIN_SANDBOX:-}" ]; then
+  # A Make me better session runs these tests in the Claude Code sandbox,
+  # where install.sh cannot run ps or open the terminal device (exit 126,
+  # measured). Apply runs this section outside the sandbox.
+  printf '  skip 5 installer dry-run checks (sandbox; Apply runs them)\n'
+else
 IS=$(mktemp -d)
 printf '{\n  "vault": "%s/vault",\n  "port": 19399,\n  "kit": "%s"\n}\n' "$IS" "$KIT" > "$IS/settings.json"
 in_out=$(SECOND_BRAIN_STATE_DIR="$IS" SECOND_BRAIN_DIR= SECOND_BRAIN_VAULT= bash "$KIT/install.sh" --dry-run --port 19399 </dev/null 2>&1); in_rc=$?
@@ -341,6 +354,7 @@ is "an existing install keeps its kit (from settings.json)" "1" "$(printf '%s' "
 is "an existing install keeps its vault, and other flags reach setup" "1" "$(printf '%s' "$in_out" | grep -cF "setup --vault $IS/vault --port 19399")"
 is "dry run changes nothing" "no" "$([ -e "$IS/vault" ] && echo yes || echo no)"
 rm -rf "$IS"
+fi
 
 printf '\n=========================\n  PASS %s   FAIL %s\n=========================\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

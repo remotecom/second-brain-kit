@@ -80,3 +80,30 @@ test('update refuses a kit checkout with local edits, and an edit inside the kit
   assert.match(r2.stdout, /CLAUDE\.md: NOT updated/);
   assert.match(fs.readFileSync(f, 'utf8'), /EDITED INSIDE\./);
 });
+
+test('a copy with commits of its own is never pulled; update says so and changes nothing', { timeout: 120000 }, async () => {
+  const w = world();
+  sh(w.live, 'checkout', '-q', '-b', 'mine');
+  sh(w.live, 'branch', `--set-upstream-to=origin/${w.branch}`, 'mine');
+  fs.appendFileSync(path.join(w.live, 'README.md'), '\nmy change\n');
+  sh(w.live, 'commit', '-qam', 'my change');
+  fs.appendFileSync(path.join(w.work, 'README.md'), '\nupstream\n');
+  sh(w.work, 'commit', '-qam', 'upstream change');
+  sh(w.work, 'push', '-q', 'origin', w.branch);
+  const before = sh(w.live, 'rev-parse', 'HEAD');
+  const r = w.cli(['update', '--yes']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /1 change\(s\) of its own, so update does not pull/);
+  assert.match(r.stdout, /upstream change/);
+  assert.equal(sh(w.live, 'rev-parse', 'HEAD'), before);
+});
+
+test('update refuses while another change to the kit holds the lock', { timeout: 120000 }, async () => {
+  const w = world();
+  const state = path.join(w.root, 'home', '.second-brain');
+  fs.mkdirSync(state, { recursive: true });
+  fs.writeFileSync(path.join(state, 'apply.lock'), JSON.stringify({ pid: process.pid, what: 'apply' }));
+  const r = w.cli(['update', '--yes']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /being changed \(apply\)/);
+});

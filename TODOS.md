@@ -22,3 +22,11 @@
 - **Blocked:** the Gmail connector has no mail scopes (`Insufficient scope`), and the op is unwritten. Design already decided in `gmail/README.md`.
 - **Must ship with:** raising the `people/` external-DRI promotion threshold from 1 thread to 2, in the same change, or the first ingest floods `wiki/people/`.
 - **Depends on:** connector re-auth with mail scopes.
+
+## Upstream fixes on Needs-You (Make me better, Phase 3)
+- **What:** when an upstream feature note is `kind: fix` or `kind: security` and a copy with its own commits has not brought it in, add one Needs-You item for it.
+- **Why:** with the "menu" model (a changed copy brings in only the upstream features its owner picks), fixes reach that copy only if picked. This is the nudge.
+- **Pros:** security fixes do not go unseen; reuses Needs-You, which people already check.
+- **Cons:** Verify owns `Needs-You.md`. A second writer can race it, so Verify should read a What's new ledger and write the items itself.
+- **Context:** the Make me better design (Phase 3). The What's new bot (Phase 2) writes the ledger. Start where `verify-bot.js` writes Needs-You.
+- **Depends on:** Phase 2 (`features/` notes and the What's new bot). Added 2026-10-15 (eng review).

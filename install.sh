@@ -163,7 +163,8 @@ main() {
 
   # --- 6. The kit ------------------------------------------------------------------
   say "6/8 The kit ($KIT)"
-  if [ -d "$KIT/.git" ]; then
+  # -e, not -d: in a git worktree (Make me better's dev copy) .git is a file.
+  if [ -e "$KIT/.git" ]; then
     run git -C "$KIT" pull --ff-only --quiet
     [ "$DRY" = 1 ] || ok "up to date"
   elif [ -e "$KIT" ]; then

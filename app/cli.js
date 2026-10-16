@@ -8,6 +8,7 @@
 //   second-brain status        what runs, what waits on you (--json)
 //   second-brain run <bot>     start a bot in the app (--wait for the result)
 //   second-brain update        pull the kit, add new config keys, re-render the kit block
+//   second-brain rollback      undo the last Make me better Apply (works when the page does not)
 //
 // setup options (each is asked for when missing and a terminal is attached):
 //   --vault <dir>       the vault folder (required; there is no default)
@@ -395,17 +396,9 @@ async function runCmd(o) {
 }
 
 // --- update (5A): pull the kit, then migrate config + re-render the kit block -------
-const git = (...a) => spawnSync('/usr/bin/git', ['-C', KIT_DIR, ...a], { encoding: 'utf8' });
-
-function kitBehind({ fetch = true } = {}) {
-  if (git('rev-parse', '--git-dir').status !== 0) return { error: `${KIT_DIR} is not a git checkout; reinstall from the repo` };
-  if (fetch) { const f = git('fetch', '--quiet'); if (f.status !== 0) return { error: `git fetch failed: ${(f.stderr || '').trim().split('\n')[0]}` }; }
-  const up = git('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}');
-  if (up.status !== 0) return { error: 'this checkout tracks no upstream branch' };
-  const n = Number(git('rev-list', '--count', 'HEAD..@{u}').stdout.trim() || 0);
-  const log = n ? git('log', '--oneline', '--no-decorate', 'HEAD..@{u}').stdout.trim().split('\n') : [];
-  return { behind: n, upstream: up.stdout.trim(), log };
-}
+// Git on the kit goes through kit-git.js (hooks off, one set of rules).
+const KG = require('./lib/kit-git');
+const kitBehind = (o) => KG.kitBehind(KIT_DIR, o);
 
 // After the pull, in the NEW code: config gets new keys (never a changed
 // value), the kit block is re-rendered (an edit inside it stops that part).
@@ -438,10 +431,18 @@ async function update(o) {
   if (!vault) fail('not set up: run `second-brain setup`.');
   if (o.post) { const r = postUpdate(vault, !!o.write); r.steps.forEach((x) => out(`  • ${x}`)); if (!r.steps.length) out('  • config.yaml and the kit block are current'); return; }
   if (morningRunning(vault)) fail('a Morning run is in progress; update after it ends.');
-  const dirty = git('status', '--porcelain', '--untracked-files=no').stdout.trim();
-  if (dirty) fail(`the kit checkout ${KIT_DIR} has local edits; update refuses to touch it:\n${dirty}`);
+  const AS = require('./lib/apply-state');
+  if (!AS.lock(install.STATE_DIR, 'update')) fail(`the kit is being changed (${(AS.holder(install.STATE_DIR) || {}).what || 'apply'}); update after it ends.`);
+  process.once('exit', () => AS.unlock(install.STATE_DIR));
+  if (!KG.trackedClean(KIT_DIR)) fail(`the kit checkout ${KIT_DIR} has local edits; update refuses to touch it:\n${KG.git(KIT_DIR, 'status', '--porcelain', '--untracked-files=no').stdout.trim()}`);
   const b = kitBehind();
   if (b.error) fail(b.error);
+  // A copy with commits of its own (Make me better) is never pulled: its
+  // owner brings upstream features in one by one (What's new).
+  if (b.ahead) {
+    out(`This copy has ${b.ahead} change(s) of its own, so update does not pull. ${b.behind ? `Upstream has ${b.behind} new commit(s):\n${b.log.map((l) => `  ${l}`).join('\n')}\nBring in what you want with Make me better.` : 'Upstream has nothing new.'}`);
+    return;
+  }
   out(b.behind ? `${b.behind} new commit(s) on ${b.upstream}:\n${b.log.map((l) => `  ${l}`).join('\n')}` : `The kit is up to date (${b.upstream}).`);
   if (!o.yes && process.stdin.isTTY && b.behind) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -449,9 +450,13 @@ async function update(o) {
     if (!/^y/i.test(a)) { out('Nothing changed.'); return; }
   }
   if (b.behind) {
-    const p = git('merge', '--ff-only', '--quiet', '@{u}');
+    const p = KG.git(KIT_DIR, 'merge', '--ff-only', '--quiet', '@{u}');
     if (p.status !== 0) fail(`the update could not fast-forward; nothing changed: ${(p.stderr || '').trim()}`);
-    out(`  ✓ kit updated to ${git('rev-parse', '--short', 'HEAD').stdout.trim()}`);
+    out(`  ✓ kit updated to ${KG.head(KIT_DIR).slice(0, 7)}`);
+    // Make me better checks that the live kit is where the last change left
+    // it; an update is such a change.
+    const a = AS.read(install.STATE_DIR);
+    if (a && a.applied) AS.write(install.STATE_DIR, { applied: [KG.head(KIT_DIR), ...a.applied] });
   }
   // The new code does the vault part.
   const post = spawnSync(process.execPath, [path.join(KIT_DIR, 'app', 'cli.js'), 'update', '--post', '--write'], { encoding: 'utf8', env: process.env });
@@ -462,6 +467,14 @@ async function update(o) {
   }
 }
 
+// Undo the last Apply from a terminal: the same runner as the page's Undo.
+function rollback() {
+  const A = require('./lib/apply');
+  const r = A.undo({ kit: KIT_DIR, stateDir: install.STATE_DIR, node: process.execPath, port: install.port(), restart: A.restartSpec() });
+  if (r.status === 'error') fail(r.summary);
+  out(`${r.summary}\nProgress: ${path.join(install.STATE_DIR, 'apply.log')}`);
+}
+
 async function main() {
   const o = parseArgs(process.argv.slice(2));
   const cmd = o._[0] || 'open';
@@ -470,6 +483,7 @@ async function main() {
   if (cmd === 'migrate') return migrate(o);
   if (cmd === 'status') return statusCmd(o);
   if (cmd === 'update') return update(o);
+  if (cmd === 'rollback') return rollback();
   if (cmd === 'run') return runCmd(o);
   if (cmd === 'help' || cmd === '--help') { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 21).map((l) => l.replace(/^\/\/ ?/, '')).join('\n')); return; }
   fail(`unknown command "${cmd}". Try: second-brain help`);
