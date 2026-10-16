@@ -678,7 +678,7 @@ function botsView() {
 
 async function handle(req, res, url, { json, readBody, claudeBin }) {
   const p = url.pathname;
-  if (!p.startsWith('/api/brain/') && !p.startsWith('/api/setup') && !p.startsWith('/api/sessions') && !p.startsWith('/api/improve') && p !== '/api/update') return false;
+  if (!p.startsWith('/api/brain/') && !p.startsWith('/api/setup') && !p.startsWith('/api/sessions') && !p.startsWith('/api/improve') && !p.startsWith('/api/whatsnew') && p !== '/api/update') return false;
 
 
   // A link clicked in the app. In a Chrome --app window, window.open (and

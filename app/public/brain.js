@@ -287,8 +287,8 @@
     const todo = news.items.filter((i) => !i.status.startsWith('have'));
     const have = news.items.filter((i) => i.status.startsWith('have'));
     const intro = news.follower
-      ? '<div class="n muted">Your copy has no changes of its own, so Update brings in everything at once (Today shows it when there is something new).</div>'
-      : '<div class="n muted">Your copy has changes of its own, so it takes features one by one. Bring this in opens a Claude session that checks for a duplicate or a clash with your changes, ports the feature, and runs the tests. Nothing changes until you press Apply.</div>';
+      ? '<div class="n muted" style="margin-bottom:12px">Your copy has no changes of its own, so Update brings in everything at once (Today shows it when there is something new).</div>'
+      : '<div class="n muted" style="margin-bottom:12px">Your copy has changes of its own, so it takes features one by one. Bring this in opens a Claude session that checks for a duplicate or a clash with your changes, ports the feature, and runs the tests. Nothing changes until you press Apply.</div>';
     const other = news.other && news.other.length ? `<details class="card"><summary class="k">${news.other.length} other upstream change(s) with no feature note</summary>
       <div class="n">${news.other.map((o) => `<code>${esc(o.sha)}</code> ${esc(o.subject)}`).join('<br>')}</div></details>` : '';
     return head + intro + (todo.length ? todo.map(newsCard).join('') : '<div class="empty">Nothing new upstream.</div>') + other

@@ -139,6 +139,20 @@ test('/alive says brain:true once a vault loads; NO_SCHEDULE starts no bot', asy
   } finally { s.kill(); }
 });
 
+test('What\'s new answers through the API (the route filter lets it in)', async () => {
+  const home = fakeHome();
+  assert.equal(run(home, ['setup', '--vault', path.join(home, 'Brain'), '--yes', '--name', 'Sam', '--no-login-item']).status, 0);
+  const { s, base } = await serve(home, { SECOND_BRAIN_NO_SCHEDULE: '1' });
+  try {
+    const token = fs.readFileSync(path.join(home, '.second-brain', 'token'), 'utf8').trim();
+    const r = await fetch(`${base}/api/whatsnew`, { headers: { 'X-Brain-Token': token } });
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.ok(Array.isArray(j.items) || typeof j.error === 'string', JSON.stringify(j).slice(0, 200));
+    assert.notEqual(j.error, 'not found');
+  } finally { s.kill(); }
+});
+
 test('setup on an existing vault adds no skeleton files to it', () => {
   const home = fakeHome();
   const vault = path.join(home, 'Old');
