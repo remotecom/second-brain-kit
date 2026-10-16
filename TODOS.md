@@ -27,6 +27,6 @@
 - **What:** when an upstream feature note is `kind: fix` or `kind: security` and a copy with its own commits has not brought it in, add one Needs-You item for it.
 - **Why:** with the "menu" model (a changed copy brings in only the upstream features its owner picks), fixes reach that copy only if picked. This is the nudge.
 - **Pros:** security fixes do not go unseen; reuses Needs-You, which people already check.
-- **Cons:** Verify owns `Needs-You.md`. A second writer can race it, so Verify should read a What's new ledger and write the items itself.
-- **Context:** the Make me better design (Phase 3). The What's new bot (Phase 2) writes the ledger. Start where `verify-bot.js` writes Needs-You.
-- **Depends on:** Phase 2 (`features/` notes and the What's new bot). Added 2026-10-15 (eng review).
+- **Cons:** Verify owns `Needs-You.md`. A second writer can race it, so Verify should call `features.whatsNew()` itself and write the items.
+- **Context:** the Make me better design (Phase 3). Phase 2 shipped What's new as code (`app/lib/features.js`, `whatsNew(kitDir)`: items with `kind` and `status`); it reads what the update check fetched, so Verify can call it with no fetch and no ledger. Start where `verify-bot.js` writes Needs-You.
+- **Depends on:** Phase 2 (done: `features/` notes, What's new, Bring this in). Added 2026-10-15 (eng review).

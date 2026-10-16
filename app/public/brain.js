@@ -50,6 +50,7 @@
   let pollTimer = null;
   let briefText = '';
   let needs = [];
+  let news = null; // What's new: { follower, items, other, error }
 
   // --- tiny markdown: escape first, then code/bold/bullets/headings/wikilinks ---
   function render(md) {
@@ -109,6 +110,10 @@
     usage = r.usage || null;
     try { const f = await api('/api/brain/file?path=Brief.md'); briefText = f.text || ''; } catch {}
     try { needs = (await api('/api/brain/needs')).items || []; } catch {}
+    try { news = await api('/api/whatsnew'); } catch {}
+    // A bot file (app/bots/) names its group; one with none, or an unknown
+    // one, lands in "Other".
+    for (const b of bots) { const g = b.group && GROUPS.find((x) => x.id === b.group); if (g && !g.bots.includes(b.id)) g.bots.push(b.id); }
     const known = new Set(GROUPS.flatMap((g) => g.bots));
     const other = bots.filter((b) => !known.has(b.id)).map((b) => b.id);
     if (other.length && !GROUPS.find((g) => g.id === 'g-other')) GROUPS.push({ id: 'g-other', name: 'Other', bots: other });
@@ -152,6 +157,7 @@
     for (const s of live.slice(0, 8)) html += `<div class="nav-item child" draggable="true" data-session="${esc(s.id)}" title="Drag to move · double-click to rename"><span class="dot ${s.running ? 'running' : 'never'}"></span><span class="lbl">${esc(s.title)}</span></div>`;
     const needsSetup = setup.some((f) => f.level === 'error');
     html += `<div class="nav-foot">
+      <div class="nav-item ${sel === 'whatsnew' ? 'sel' : ''}" data-sel="whatsnew" title="New features in the kit, and the ones you have"><span class="lbl">What's new</span>${newCount() ? `<span class="badge">${newCount()}</span>` : ''}</div>
       <div class="nav-item" data-improve title="Change your own copy of this app, guided by its rules"><span class="lbl">✦ Make me better</span></div>
       <div class="nav-item ${sel === 'setup' ? 'sel' : ''}" data-sel="setup"><span class="lbl">Setup</span>${needsSetup ? '<span class="badge">!</span>' : ''}</div>
       <a class="nav-item" href="obsidian://open?vault=${encodeURIComponent(vaultName)}"><span class="lbl">Open in Obsidian ↗</span></a></div>`;
@@ -217,7 +223,7 @@
     if (lastPage === '__setup__') window.SetupPage.unmount($('#page'));
     const g = GROUPS.find((x) => x.id === sel);
     const b = byId(sel);
-    const html = sel === 'today' ? todayPage() : sel === 'sessions' ? sessionsPage() : sel === 'chat' ? chatPage() : g ? groupPage(g) : b ? botPage(b) : '<div class="empty">Pick something on the left.</div>';
+    const html = sel === 'today' ? todayPage() : sel === 'whatsnew' ? newsPage() : sel === 'sessions' ? sessionsPage() : sel === 'chat' ? chatPage() : g ? groupPage(g) : b ? botPage(b) : '<div class="empty">Pick something on the left.</div>';
     if (html === lastPage) return;
     const doc = document.querySelector('#page .doc');
     const keep = doc ? doc.scrollTop : 0;
@@ -242,9 +248,51 @@
   function updateCard() {
     const u = kitUpdate;
     if (!u || !u.behind) return '';
+    // A copy with changes of its own is never pulled: it takes features one
+    // by one from What's new.
+    if (u.ahead) {
+      return newCount() ? `<div class="card"><div class="k" style="color:var(--accent)">What's new · ${newCount()} feature(s) you do not have</div>
+      <div class="n">Your copy has ${u.ahead} change(s) of its own, so it takes upstream features one by one.</div>
+      <div class="row"><button class="small" data-sel="whatsnew">Open What's new</button></div></div>` : '';
+    }
     return `<div class="card"><div class="k" style="color:var(--accent)">Kit update · ${u.behind} new commit(s)</div>
       <div class="n">${(u.log || []).slice(0, 6).map((l) => esc(l)).join('<br>')}</div>
       <div class="row"><button class="small" data-update>Update</button><span class="muted">Adds new config keys (never changes yours) and refreshes the kit block in CLAUDE.md. The app restarts.</span></div></div>`;
+  }
+
+  // --- What's new: upstream feature notes and how this copy stands on each ---
+  const NEWS = {
+    update: ['comes with Update', ''],
+    new: ['new', ''],
+    'may-conflict': ['may conflict', 'warn'],
+    have: ['you have it', 'ok'],
+    'have-version': ['you have your own version', 'ok'],
+  };
+  function newCount() { return news && news.items ? news.items.filter((i) => i.status === 'new' || i.status === 'may-conflict').length : 0; }
+  function newsCard(i) {
+    const [label, cls] = NEWS[i.status] || [i.status, ''];
+    const kind = i.kind !== 'feature' ? `<span class="pill ${i.kind === 'security' ? 'error' : 'warn'}">${esc(i.kind)}</span> ` : '';
+    const port = i.status === 'new' || i.status === 'may-conflict';
+    return `<div class="card"><div class="k">${kind}${esc(i.title)} <span class="pill ${cls}">${esc(label)}</span></div>
+      <div class="n">${esc(i.body)}</div>
+      ${i.conflicts && i.conflicts.length ? `<div class="n warn">Your own changes touch the same files: ${i.conflicts.map((f) => `<code>${esc(f)}</code>`).join(', ')}. The session checks for a clash with you first.</div>` : ''}
+      ${i.principles && i.principles.length ? `<div class="n muted">Rules it relies on: ${i.principles.map(esc).join(', ')}</div>` : ''}
+      ${port ? `<div class="row"><button class="small" data-port="${esc(i.id)}" title="Open a Claude session that ports this into your copy. Nothing changes until you press Apply.">Bring this in</button>
+        <button class="small ghost" data-port="${esc(i.id)}" data-port-change="1" title="Say what you want different, then the session ports it your way">Bring in with a change</button></div>` : ''}</div>`;
+  }
+  function newsPage() {
+    const head = `<h1>What's new</h1><div class="sub">Features and fixes in the kit, from their feature notes.${news && news.checkedAt ? ` Checked ${ago(news.checkedAt)}.` : ''} <button class="small ghost" data-news-refresh>Check now</button></div>`;
+    if (!news) return head + '<div class="empty">Loading…</div>';
+    if (news.error) return head + `<div class="card"><div class="n">${esc(news.error)}</div></div>`;
+    const todo = news.items.filter((i) => !i.status.startsWith('have'));
+    const have = news.items.filter((i) => i.status.startsWith('have'));
+    const intro = news.follower
+      ? '<div class="n muted">Your copy has no changes of its own, so Update brings in everything at once (Today shows it when there is something new).</div>'
+      : '<div class="n muted">Your copy has changes of its own, so it takes features one by one. Bring this in opens a Claude session that checks for a duplicate or a clash with your changes, ports the feature, and runs the tests. Nothing changes until you press Apply.</div>';
+    const other = news.other && news.other.length ? `<details class="card"><summary class="k">${news.other.length} other upstream change(s) with no feature note</summary>
+      <div class="n">${news.other.map((o) => `<code>${esc(o.sha)}</code> ${esc(o.subject)}`).join('<br>')}</div></details>` : '';
+    return head + intro + (todo.length ? todo.map(newsCard).join('') : '<div class="empty">Nothing new upstream.</div>') + other
+      + (have.length ? `<details class="card"><summary class="k">${have.length} feature(s) you have</summary>${have.map((i) => `<div class="n">${esc(i.title)} <span class="pill ok">${esc(NEWS[i.status][0])}</span></div>`).join('')}</details>` : '');
   }
 
   function todayPage() {
@@ -543,6 +591,16 @@
     }
     const rn = t.closest('[data-rename]');
     if (rn) return renameSession(rn.dataset.rename);
+    if (t.closest('[data-news-refresh]')) { news = await api('/api/whatsnew/refresh', { method: 'POST', body: '{}' }); lastPage = ''; return paint(); }
+    const pt = t.closest('[data-port]');
+    if (pt) {
+      let change = '';
+      if (pt.dataset.portChange) { change = prompt('What do you want different? The session reads this before it plans.') || ''; if (!change.trim()) return; }
+      const r = await api('/api/improve/open', { method: 'POST', body: JSON.stringify({ port: { id: pt.dataset.port, change } }) });
+      if (r.error) { alert(r.error); if (r.session) window.SessionPanel.openId(r.session.id); return; }
+      load();
+      return window.SessionPanel.openId(r.session.id);
+    }
     if (t.closest('[data-improve]')) {
       const r = await api('/api/improve/open', { method: 'POST', body: '{}' });
       if (r.error) return alert(`Make me better could not start: ${r.error}`);

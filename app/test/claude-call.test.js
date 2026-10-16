@@ -46,9 +46,14 @@ test('botEnv strips ANTHROPIC_API_KEY (it would beat the claude.ai login)', () =
 });
 
 test('no bot module builds its own claude flag list', () => {
-  const dir = path.join(__dirname, '..', 'lib');
-  for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.js') && !['claude-call.js', 'doctor.js'].includes(n))) {
-    const src = fs.readFileSync(path.join(dir, f), 'utf8');
+  const lib = path.join(__dirname, '..', 'lib'), bots = path.join(__dirname, '..', 'bots');
+  const files = [
+    ...fs.readdirSync(lib).filter((n) => n.endsWith('.js') && !['claude-call.js', 'doctor.js'].includes(n)).map((n) => path.join(lib, n)),
+    ...(fs.existsSync(bots) ? fs.readdirSync(bots).filter((n) => n.endsWith('.js')).map((n) => path.join(bots, n)) : []),
+  ];
+  for (const file of files) {
+    const f = path.basename(file);
+    const src = fs.readFileSync(file, 'utf8');
     assert.ok(!/'--setting-sources'/.test(src), `${f} passes --setting-sources itself`);
     assert.ok(!/'--permission-prompts'/.test(src), `${f} passes --permission-prompts itself`);
   }

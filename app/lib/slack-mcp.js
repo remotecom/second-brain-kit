@@ -20,7 +20,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { claudeStream, verify, commit, rangeFor } = require('./sync');
+const { verify, commit, rangeFor } = require('./sync');
 const { redact } = require('./redact');
 const { pressButtons } = require('./buttons');
 const { requireOwner, getConfig } = require('./config');

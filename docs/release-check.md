@@ -114,6 +114,14 @@ week), say so in the PR: the default share, or the run, needs to change.
       **Apply** stops at the smoke start, nothing switches
 - [ ] **Undo last Apply** goes back; the page says "Undo worked"
 - [ ] `bash tests/evals/improve-objections.sh` passes 5/5 (about $0.50)
+- [ ] **What's new** lists the upstream feature notes; a copy with no
+      commits of its own says Update brings them in
+- [ ] after one Apply, push a feature with a note to the test upstream:
+      What's new shows it as **new** (or **may conflict** if it touches a
+      file you changed), and Today shows the What's new card, not Update
+- [ ] **Bring this in** opens a session that names the note's commits; it
+      ports, tests, keeps the note with `ported_from`, and Apply works; the
+      feature then shows as **you have it**
 
 ## 7. The gate to teammate #2 (OV8)
 

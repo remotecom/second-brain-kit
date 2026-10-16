@@ -440,7 +440,7 @@ async function update(o) {
   // A copy with commits of its own (Make me better) is never pulled: its
   // owner brings upstream features in one by one (What's new).
   if (b.ahead) {
-    out(`This copy has ${b.ahead} change(s) of its own, so update does not pull. ${b.behind ? `Upstream has ${b.behind} new commit(s):\n${b.log.map((l) => `  ${l}`).join('\n')}\nBring in what you want with Make me better.` : 'Upstream has nothing new.'}`);
+    out(`This copy has ${b.ahead} change(s) of its own, so update does not pull. ${b.behind ? `Upstream has ${b.behind} new commit(s):\n${b.log.map((l) => `  ${l}`).join('\n')}\nOpen What's new in the app to bring in what you want.` : 'Upstream has nothing new.'}`);
     return;
   }
   out(b.behind ? `${b.behind} new commit(s) on ${b.upstream}:\n${b.log.map((l) => `  ${l}`).join('\n')}` : `The kit is up to date (${b.upstream}).`);

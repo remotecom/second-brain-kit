@@ -26,6 +26,9 @@ app. It is **public**. Each person's vault (raw sources, wiki, `config.yaml`,
   (switch + rollback, runs detached from a snapshot), `app/lib/kit-git.js`
   (every git command on the kit, hooks off), `app/lib/apply-state.js`
   (`apply.json` and the lock shared with `update`).
+- `features/` — one note per change a user can see (`features/README.md`).
+  `app/lib/features.js` reads them for What's new and Bring this in.
+- `app/bots/` — bots added as files, loaded by `app/lib/bot-registry.js`.
 
 ## Rules for changes
 
@@ -42,4 +45,7 @@ form:
 - **The model presses buttons; code writes raw.** Bots never write raw files,
   watermarks or ticks themselves.
 - **Every unattended `claude -p` call goes through `app/lib/claude-call.js`.**
+- **Every change a user can see ships with a feature note**,
+  `features/<id>.md`, in the same commit. What's new reads these notes; a
+  change with no note shows only as a bare commit line there.
 - Run `bash tests/run.sh` before every commit.

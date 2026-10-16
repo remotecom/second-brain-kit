@@ -187,6 +187,16 @@ const BOTS = [
   },
 ];
 
+// Bots added as files (app/bots/<id>.js, docs/framework/bot.md). Their run
+// gets the same context the built-in bots use.
+{
+  const { bots, skipped } = require('./bot-registry').load(path.join(KIT_DIR, 'app', 'bots'), BOTS.map((b) => b.id));
+  for (const s of skipped) console.log(`bot app/bots/${s.file} skipped: ${s.why}`);
+  for (const b of bots) {
+    BOTS.push({ ...b, run: (run, claudeBin, body = {}) => b.run(run, { claudeBin, vault: VAULT, env: claudeEnv(), logLine, finish, runBot: (id, bd) => runBotAndWait(id, claudeBin, bd) }, body) });
+  }
+}
+
 const runs = new Map(); // runId -> run (in memory, newest kept per bot)
 let seq = 0;
 
@@ -224,6 +234,15 @@ function releaseLock() {
 let kitUpdate = null;
 function checkUpdate() {
   try { const r = require('../cli').kitBehind(); kitUpdate = { ...r, checkedAt: new Date().toISOString() }; } catch (e) { kitUpdate = { error: e.message }; }
+  refreshWhatsNew();
+}
+// What's new reads the fetch above; it never fetches by itself.
+let whatsNew = null;
+function refreshWhatsNew() {
+  try { whatsNew = { ...require('./features').whatsNew(KIT_DIR), checkedAt: kitUpdate && kitUpdate.checkedAt }; } catch (e) { whatsNew = { error: e.message }; }
+  if (kitUpdate && !kitUpdate.error && whatsNew && whatsNew.items) {
+    kitUpdate.features = whatsNew.items.filter((i) => ['new', 'may-conflict', 'update'].includes(i.status)).length;
+  }
 }
 
 function start(claudeBin) {
@@ -650,7 +669,7 @@ function answerNeed(id, label) {
 }
 
 function botsView() {
-  return BOTS.map(({ id, name, kind, blurb }) => ({ id, name, kind, blurb, last: latestFor(id), todo: todoFor(id) }));
+  return BOTS.map(({ id, name, kind, blurb, group }) => ({ id, name, kind, blurb, group: group || null, last: latestFor(id), todo: todoFor(id) }));
 }
 
 // --- HTTP ------------------------------------------------------------------
@@ -722,11 +741,24 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     // One dev copy, so one Make me better session at a time.
     const cur = SESSIONS.list().find((x) => x.kind === 'improve' && x.state !== 'done');
     try {
-      if (cur) return json(res, 200, { session: SESSIONS.open(cur.id).toJSON() }), true;
       const b = await readBody(req);
+      // Bring this in (What's new) opens the same kind, with a port prompt.
+      const port = b.port && typeof b.port.id === 'string' ? { id: b.port.id, change: typeof b.port.change === 'string' ? b.port.change : '' } : null;
+      if (cur && port && !(cur.item && cur.item.port === port.id)) return json(res, 409, { error: `"${cur.title}" is still open in your dev copy. Apply, Discard or Close it first: one dev copy, one session.`, session: cur }), true;
+      if (cur) return json(res, 200, { session: SESSIONS.open(cur.id).toJSON() }), true;
       const model = ['opus', 'sonnet', 'haiku'].includes(b.model) ? b.model : 'opus';
-      return json(res, 200, { session: SESSIONS.create({ ...require('./improve').spec(KIT_DIR, STATE_DIR, VAULT), model }).toJSON() }), true;
+      return json(res, 200, { session: SESSIONS.create({ ...require('./improve').spec(KIT_DIR, STATE_DIR, VAULT, { port }), model }).toJSON() }), true;
     } catch (e) { return json(res, 400, { error: e.message }), true; }
+  }
+  // What's new: the upstream feature notes and how this copy stands on each.
+  // Code only; it reads what the update check fetched. Refresh fetches now.
+  if (p === '/api/whatsnew' && req.method === 'GET') {
+    if (!whatsNew) refreshWhatsNew();
+    return json(res, 200, whatsNew), true;
+  }
+  if (p === '/api/whatsnew/refresh' && req.method === 'POST') {
+    checkUpdate();
+    return json(res, 200, whatsNew), true;
   }
   if (p === '/api/improve/apply' && req.method === 'POST') {
     const busy = [...runs.values()].find((r) => r.status === 'running');
