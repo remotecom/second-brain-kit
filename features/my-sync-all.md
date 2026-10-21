@@ -2,7 +2,7 @@
 id: my-sync-all
 title: Sync All runs every sync in one click
 kind: feature
-commits: [ab7718c]
+commits: [ccfabeb]
 files: [app/bots/sync-all.js, app/lib/schedule.js, app/lib/brain.js]
 principles: [one-driver, config-not-hardcode]
 ---
