@@ -67,38 +67,49 @@ function nextRun(vault, now = new Date()) {
   return new Date(next).toISOString();
 }
 
-// The chain itself. ctx.runBot(id, body) starts a bot as its own recorded run and
-// resolves with it when it ends.
-async function runMorning(run, ctx) {
-  const { vault, logLine, finish, runBot, isRunning } = ctx;
-  const s = settings(vault);
-  const st = readState(vault);
-  // Mark the day first, so a crash mid-chain does not re-run it every 5 minutes.
-  writeState(vault, { ...st, lastMorning: localDay(vault), startedAt: new Date().toISOString() });
-  let cost = 0, paused = false;
-  const steps = [];
-  const step = async (id, body) => {
-    if (isRunning(id)) { logLine(run, `${id}: already running, skipped`); steps.push(`${id} busy`); return null; }
-    if (paused) { steps.push(`${id.replace('sync-', '')} paused`); return null; }
+// One step of a chain: start a bot as its own run, log it, add up the cost.
+// A spent usage share pauses every later step of the same chain.
+function stepper(run, { logLine, runBot, isRunning }) {
+  const st = { cost: 0, paused: false, steps: [] };
+  st.step = async (id, body) => {
+    if (isRunning(id)) { logLine(run, `${id}: already running, skipped`); st.steps.push(`${id} busy`); return null; }
+    if (st.paused) { st.steps.push(`${id.replace('sync-', '')} paused`); return null; }
     logLine(run, `${id}: starting`);
     const r = await runBot(id, body);
     // Today's usage share is spent: the rest of the chain waits for tomorrow.
-    if (r.detail && r.detail.kind === 'usage') { paused = true; logLine(run, `paused: ${r.summary}`); }
-    cost += r.costUsd || 0;
+    if (r.detail && r.detail.kind === 'usage') { st.paused = true; logLine(run, `paused: ${r.summary}`); }
+    st.cost += r.costUsd || 0;
     logLine(run, `${id}: ${r.status} · ${r.summary}${r.costUsd ? ` · $${r.costUsd.toFixed(2)}` : ''}`);
-    steps.push(`${id.replace('sync-', '')} ${r.status}`);
+    st.steps.push(`${id.replace('sync-', '')} ${r.status}`);
     return r;
   };
+  return st;
+}
 
+// Every sync, in order. Used by the Morning run and by Sync all.
+async function runSyncs(run, vault, logLine, st) {
   // A source turned off in config.yaml is skipped, and says so.
   const srcs = getConfig(vault).sources;
   for (const id of SYNC_ORDER) {
     const key = id.replace('sync-', '');
-    if (srcs[key] && srcs[key].enabled === false) { logLine(run, `${id}: turned off in config.yaml, skipped`); steps.push(`${key} skipped`); continue; }
+    if (srcs[key] && srcs[key].enabled === false) { logLine(run, `${id}: turned off in config.yaml, skipped`); st.steps.push(`${key} skipped`); continue; }
     // The Linear scope is rebuilt weekly, just before the Linear sync.
-    if (id === 'sync-linear' && scopeAgeDays(vault) > 7) await step('rescope', {});
-    await step(id);
+    if (id === 'sync-linear' && scopeAgeDays(vault) > 7) await st.step('rescope', {});
+    await st.step(id);
   }
+}
+
+// The chain itself. ctx.runBot(id, body) starts a bot as its own recorded run and
+// resolves with it when it ends.
+async function runMorning(run, ctx) {
+  const { vault, logLine, finish } = ctx;
+  const s = settings(vault);
+  const st = readState(vault);
+  // Mark the day first, so a crash mid-chain does not re-run it every 5 minutes.
+  writeState(vault, { ...st, lastMorning: localDay(vault), startedAt: new Date().toISOString() });
+  const chain = stepper(run, ctx);
+  const { step, steps } = chain;
+  await runSyncs(run, vault, logLine, chain);
   await step('resolve', {}); // the owner's answers land before Brief and Ingest read the wiki
   await step('brief', {});
 
@@ -123,6 +134,7 @@ async function runMorning(run, ctx) {
   }
   if (ingest && ingest.status !== 'error') await step('verify', {});
 
+  const { cost } = chain;
   const failed = steps.filter((x) => / error$/.test(x));
   writeState(vault, { ...readState(vault), endedAt: new Date().toISOString(), steps });
   finish(run, failed.length ? 'warn' : 'ok', steps.join(' · '), { steps }, cost);
@@ -152,4 +164,4 @@ function startScheduler(ctx) {
   return setInterval(tick, TICK_MS);
 }
 
-module.exports = { runMorning, startScheduler, nextRun, settings, isDue };
+module.exports = { runMorning, runSyncs, stepper, SYNC_ORDER, startScheduler, nextRun, settings, isDue };
