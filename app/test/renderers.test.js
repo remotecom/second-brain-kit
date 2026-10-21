@@ -167,6 +167,42 @@ test('notion filenameFor: new page gets the flat id, existing dashed file is reu
   assert.equal(notion.filenameFor(v, id), `notion/pages/${flat}.md`); // flat wins when both exist
 });
 
+const NPAGE_ID = '0a1b2c3d00004000800001234567890a';
+const nmeta = (extra = {}) => ({ title: 'From search', url: 'https://notion.example/p', timestamp: '1 day ago (2026-10-01)', reasons: new Set(['mentioned', 'created_by_me']), ...extra });
+
+test('notion renderPage: a plain page, exact output', () => {
+  const page = {
+    title: 'Acme launch plan', url: 'https://notion.example/acme?pvs=4', page_last_edited_at: '2026-10-01T09:00:00.000Z',
+    text: '<properties>\n{"title":"Acme launch plan","Status":"Draft"}\n</properties>\n<content>\nHello **world**.\n</content>',
+  };
+  const r = notion.renderPage(NPAGE_ID, nmeta(), page, '');
+  assert.equal(r.edited, '2026-10-01T09:00:00.000Z');
+  assert.equal(r.md, [
+    '---', 'notion_type: page', 'notion_id: 0a1b2c3d-0000-4000-8000-01234567890a', 'title: "Acme launch plan"',
+    'parent_type: null', 'parent_id: null', 'parent_database: null', 'created_by: Unknown', 'last_edited_by: Unknown',
+    'created_time: null', 'last_edited_time: "2026-10-01T09:00:00.000Z"', 'url: "https://notion.example/acme"',
+    'properties:', '  Status: "Draft"', 'in_scope_reasons: [created_by_me, mentioned]',
+    'tags:', '  - notion', '  - notion/page', '---', '', '# Acme launch plan', '', 'Hello **world**.', '', '## Comments', '_No comments._', '',
+  ].join('\n'));
+});
+
+test('notion renderPage: a blank database row, Notion truncation and unfetched comments', () => {
+  const page = {
+    truncated: true, unknown_block_count: 2,
+    text: '<ancestor-path><parent-database url="x" title="Globex tasks"/></ancestor-path><blank-page>',
+  };
+  const { md } = notion.renderPage(NPAGE_ID, nmeta(), page, null);
+  assert.match(md, /^notion_type: database_row$/m);
+  assert.match(md, /^parent_database: "Globex tasks"$/m);
+  assert.match(md, /^last_edited_time: "2026-10-01"$/m);
+  assert.match(md, /^truncated: true\nunknown_block_count: 2$/m);
+  assert.match(md, /# From search\n\n\n\n## Comments\n_Comments not fetched: the connector returned no result in 3 consecutive runs._\n$/);
+});
+
+test('notion renderPage: no <content> block is an error, not a file', () => {
+  assert.deepEqual(notion.renderPage(NPAGE_ID, nmeta(), { text: 'nothing' }, ''), { error: 'no <content> block' });
+});
+
 // --- gdrive-mcp -----------------------------------------------------------------
 
 const META = { id: 'file0000001', title: 'Acme launch plan', mimeType: 'application/vnd.google-apps.document', owner: 'jane.doe@example.com', parentId: 'fold0000001', viewUrl: 'https://drive.example/d/file0000001', createdTime: '2026-09-01T00:00:00Z', modifiedTime: '2026-10-01T00:00:00Z' };

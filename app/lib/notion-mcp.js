@@ -71,6 +71,52 @@ function renderComments(xml) {
   return out.length ? out.join('\n') : '_No comments._';
 }
 
+// One page's raw file from its notion-fetch result. commentsText null means
+// the comments were never fetched (declared placeholder). Returns
+// { md, edited } or { error } when the result has no body to write.
+function renderPage(id, meta, page, commentsText) {
+  const text = String(page.text || '');
+  // A database row with no body comes back as <blank-page>; its properties
+  // are the content, so an empty body is correct there.
+  let body = (text.match(/<content>\n?([\s\S]*?)\n?<\/content>/) || [])[1];
+  if (body === undefined && /<blank-page>/.test(text)) body = '';
+  if (body === undefined) return { error: 'no <content> block' };
+  let props = {};
+  try { props = JSON.parse((text.match(/<properties>\n?([\s\S]*?)\n?<\/properties>/) || [])[1] || '{}'); } catch {}
+  const title = page.title || props.title || meta.title || 'Untitled';
+  const parentDb = parentDatabase(text);
+  const edited = page.page_last_edited_at || tsDay(meta.timestamp) || null;
+  const extraProps = Object.entries(props).filter(([k]) => k !== 'title');
+  const fm = [
+    '---',
+    `notion_type: ${parentDb ? 'database_row' : 'page'}`,
+    `notion_id: ${dashed(id)}`,
+    `title: ${q(title)}`,
+    `parent_type: ${parentDb ? 'database' : 'null'}`,
+    'parent_id: null',
+    `parent_database: ${q(parentDb)}`,
+    'created_by: Unknown',
+    'last_edited_by: Unknown',
+    'created_time: null',
+    `last_edited_time: ${q(edited)}`,
+    `url: ${q(String(page.url || meta.url || '').replace(/\?pvs=\d+$/, ''))}`,
+    extraProps.length ? 'properties:' : 'properties: {}',
+    ...extraProps.map(([k, v]) => `  ${k}: ${JSON.stringify(typeof v === 'string' ? v : JSON.stringify(v))}`),
+    `in_scope_reasons: [${[...meta.reasons].sort().join(', ')}]`,
+    // Notion itself cuts very large pages; say so rather than imply a full copy.
+    ...(page.truncated ? ['truncated: true', `unknown_block_count: ${page.unknown_block_count || 0}`] : []),
+    'tags:', '  - notion', `  - notion/${parentDb ? 'database_row' : 'page'}`,
+    '---',
+  ].join('\n');
+  const md = `${fm}\n\n# ${title}\n\n${body.trim()}\n\n## Comments\n${commentsText === null ? COMMENTS_UNFETCHED : renderComments(commentsText)}\n`;
+  return { md, edited };
+}
+
+function parentDatabase(text) {
+  const ancestors = (String(text).match(/<ancestor-path>([\s\S]*?)<\/ancestor-path>/) || [])[1] || '';
+  return (ancestors.match(/<parent-database[^>]*title="([^"]*)"/) || ancestors.match(/<parent-data-source[^>]*name="([^"]*)"/) || [])[1] || null;
+}
+
 async function syncNotionMcp(run, ctx) {
   const { vault, logLine, finish, src } = ctx;
   const log = (s) => logLine(run, s);
@@ -176,42 +222,10 @@ async function syncNotionMcp(run, ctx) {
     // placeholder instead of retrying it forever (one page did this 09-30 → 10-02).
     const gaveUp = !comments && (meta.attempts || 0) + 1 >= COMMENT_TRIES;
     if (!comments && !gaveUp) continue;
-    const text = String(page.text || '');
-    // A database row with no body comes back as <blank-page>; its properties
-    // are the content, so an empty body is correct there.
-    let body = (text.match(/<content>\n?([\s\S]*?)\n?<\/content>/) || [])[1];
-    if (body === undefined && /<blank-page>/.test(text)) body = '';
-    if (body === undefined) { unfinished.push(`fetch ${id}: no <content> block`); continue; }
-    let props = {};
-    try { props = JSON.parse((text.match(/<properties>\n?([\s\S]*?)\n?<\/properties>/) || [])[1] || '{}'); } catch {}
-    const title = page.title || props.title || meta.title || 'Untitled';
-    const ancestors = (text.match(/<ancestor-path>([\s\S]*?)<\/ancestor-path>/) || [])[1] || '';
-    const parentDb = (ancestors.match(/<parent-database[^>]*title="([^"]*)"/) || ancestors.match(/<parent-data-source[^>]*name="([^"]*)"/) || [])[1] || null;
-    const edited = page.page_last_edited_at || tsDay(meta.timestamp) || null;
-    const t = Date.parse(edited); if (Number.isFinite(t) && t > maxEdited) maxEdited = t;
-    const extraProps = Object.entries(props).filter(([k]) => k !== 'title');
-    const fm = [
-      '---',
-      `notion_type: ${parentDb ? 'database_row' : 'page'}`,
-      `notion_id: ${dashed(id)}`,
-      `title: ${q(title)}`,
-      `parent_type: ${parentDb ? 'database' : 'null'}`,
-      'parent_id: null',
-      `parent_database: ${q(parentDb)}`,
-      'created_by: Unknown',
-      'last_edited_by: Unknown',
-      'created_time: null',
-      `last_edited_time: ${q(edited)}`,
-      `url: ${q(String(page.url || meta.url || '').replace(/\?pvs=\d+$/, ''))}`,
-      extraProps.length ? 'properties:' : 'properties: {}',
-      ...extraProps.map(([k, v]) => `  ${k}: ${JSON.stringify(typeof v === 'string' ? v : JSON.stringify(v))}`),
-      `in_scope_reasons: [${[...meta.reasons].sort().join(', ')}]`,
-      // Notion itself cuts very large pages; say so rather than imply a full copy.
-      ...(page.truncated ? ['truncated: true', `unknown_block_count: ${page.unknown_block_count || 0}`] : []),
-      'tags:', '  - notion', `  - notion/${parentDb ? 'database_row' : 'page'}`,
-      '---',
-    ].join('\n');
-    files.set(filenameFor(vault, id), `${fm}\n\n# ${title}\n\n${body.trim()}\n\n## Comments\n${gaveUp ? COMMENTS_UNFETCHED : renderComments(comments.text)}\n`);
+    const r = renderPage(id, meta, page, gaveUp ? null : comments.text);
+    if (r.error) { unfinished.push(`fetch ${id}: ${r.error}`); continue; }
+    const t = Date.parse(r.edited); if (Number.isFinite(t) && t > maxEdited) maxEdited = t;
+    files.set(filenameFor(vault, id), r.md);
   }
   log(`rendered ${files.size} page file(s); ${unfinished.length} unfinished`);
   for (const u of unfinished.slice(0, 8)) log(`gap: ${u}`);
@@ -235,4 +249,4 @@ async function syncNotionMcp(run, ctx) {
     { pages: pages.size, unfinished: unfinished.length }, cost);
 }
 
-module.exports = { syncNotionMcp, renderComments, filenameFor };
+module.exports = { syncNotionMcp, renderComments, renderPage, filenameFor };
