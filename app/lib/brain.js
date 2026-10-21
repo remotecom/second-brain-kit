@@ -193,7 +193,7 @@ const BOTS = [
   const { bots, skipped } = require('./bot-registry').load(path.join(KIT_DIR, 'app', 'bots'), BOTS.map((b) => b.id));
   for (const s of skipped) console.log(`bot app/bots/${s.file} skipped: ${s.why}`);
   for (const b of bots) {
-    BOTS.push({ ...b, run: (run, claudeBin, body = {}) => b.run(run, { claudeBin, vault: VAULT, env: claudeEnv(), logLine, finish, runBot: (id, bd) => runBotAndWait(id, claudeBin, bd) }, body) });
+    BOTS.push({ ...b, run: (run, claudeBin, body = {}) => b.run(run, { claudeBin, vault: VAULT, env: claudeEnv(), logLine, finish, isRunning, runBot: (id, bd) => runBotAndWait(id, claudeBin, bd) }, body) });
   }
 }
 

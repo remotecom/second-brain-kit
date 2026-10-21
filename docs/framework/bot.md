@@ -21,7 +21,7 @@ or as a step of the Morning run. Examples: `lint` (a script, no tokens),
      id: 'stale-pages', name: 'Stale pages', kind: 'bash',  // or 'model'
      group: 'g-checks',  // nav group: g-daily, g-syncs, g-wiki, g-checks; else "Other"
      blurb: 'What it does and what it costs.',
-     run: async (run, { claudeBin, vault, env, logLine, finish, runBot }, body) => { ... },
+     run: async (run, { claudeBin, vault, env, logLine, finish, isRunning, runBot }, body) => { ... },
    };
    ```
    - The id matches the file name. `app/lib/bot-registry.js` checks the
@@ -34,6 +34,7 @@ or as a step of the Morning run. Examples: `lint` (a script, no tokens),
      Glob, Grep. Add `mcp: true` only when it needs claude.ai connectors (they
      cost tokens on every turn).
    - `runBot(id, body)` starts another bot as its own recorded run.
+     `isRunning(id)` says if that bot is running now.
    - Put larger code in `app/lib/<name>-bot.js` and call it from the file.
 2. **Morning run** (only if it runs daily): `app/lib/schedule.js`,
    `runMorning()`. Say in the plan why it must be daily and what it costs.

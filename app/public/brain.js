@@ -29,7 +29,7 @@
   // Groups are a view over the bot registry; a bot not listed here lands in "Other".
   const GROUPS = [
     { id: 'g-daily', name: 'Daily', bots: ['morning', 'brief'] },
-    { id: 'g-syncs', name: 'Syncs', bots: ['sync-slack', 'sync-gcal', 'sync-linear', 'sync-notion', 'sync-gdrive', 'rescope'] },
+    { id: 'g-syncs', name: 'Syncs', bots: ['sync-all', 'sync-slack', 'sync-gcal', 'sync-linear', 'sync-notion', 'sync-gdrive', 'rescope'] },
     { id: 'g-wiki', name: 'Wiki upkeep', bots: ['ingest', 'verify', 'resolve', 'restructure'] },
     { id: 'g-checks', name: 'Checks', bots: ['health', 'lint', 'deltas'] },
   ];

@@ -6,7 +6,7 @@
 //     id: 'stale-pages', name: 'Stale pages', kind: 'bash',   // or 'model'
 //     group: 'g-checks',                                      // a nav group id; else "Other"
 //     blurb: 'What it does and what it costs.',
-//     run: async (run, { claudeBin, vault, env, logLine, finish, runBot }, body) => { ... },
+//     run: async (run, { claudeBin, vault, env, logLine, finish, isRunning, runBot }, body) => { ... },
 //   };
 //
 // A broken file never stops the app: it is skipped, and the reason is
