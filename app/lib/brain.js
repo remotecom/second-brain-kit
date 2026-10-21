@@ -203,6 +203,10 @@ let seq = 0;
 // Today in the owner's zone (config.yaml owner.timezone).
 function localDay(d = new Date()) { return dayOf(d, getConfig(VAULT).owner.timezone); }
 function isRunning(botId) { return [...runs.values()].some((r) => r.bot === botId && r.status === 'running'); }
+// While Apply checks or switches a change, other work waits: the switch
+// restarts the app and would kill a bot mid-run.
+const APPLY_HOLD = 'Apply is checking a change for the app; try again in a few minutes.';
+function applyBusy() { return isRunning('apply') || require('./apply-state').switching(STATE_DIR); }
 
 // Start a bot as its own recorded run and resolve with that run when it ends.
 async function runBotAndWait(botId, claudeBin, body = {}) {
@@ -256,6 +260,12 @@ function start(claudeBin) {
   }
   heartbeat();
   setInterval(heartbeat, 60000).unref();
+  // An Apply run left 'running' on disk: the app stopped during it.
+  {
+    const r = latestFor('apply');
+    const fix = require('./apply-progress').reconcile(r, require('./apply-state').read(STATE_DIR));
+    if (fix) finish(r, fix.status, fix.summary, fix.detail);
+  }
   if (claudeBin) SESSIONS = new Sessions({ vault: VAULT, stateDir: STATE_DIR, claudeBin });
   for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { if (SESSIONS) SESSIONS.stopAll(); releaseLock(); process.exit(0); });
   process.once('exit', releaseLock);
@@ -265,8 +275,8 @@ function start(claudeBin) {
     vault: VAULT,
     startMorning: () => {
       if (isRunning('morning')) return;
-      // An Apply is switching the code; it may roll back within a minute.
-      if (require('./apply-state').switching(STATE_DIR)) return;
+      // An Apply checks or switches the code; it may restart within minutes.
+      if (applyBusy()) return;
       // Blocked by setup: no run record every 5-minute tick; one log line a
       // day, and the Today page shows the issue. It runs once it is fixed.
       const blk = doctor.blockers(doctorNow(true), 'morning');
@@ -307,6 +317,11 @@ function failRun(run, e) {
 function finish(run, status, summary, detail, costUsd = 0) {
   Object.assign(run, { status, summary, detail, costUsd, endedAt: stampNow() });
   logLine(run, `${status.toUpperCase()}: ${summary}`);
+  saveRun(run);
+}
+// The run record on disk. A bot's is written when it ends; Apply's also at
+// each step, so a restart in the middle leaves a trace.
+function saveRun(run) {
   try {
     fs.mkdirSync(RUNS_DIR, { recursive: true });
     const name = `${run.startedAt.replace(/[:.]/g, '-')}-${run.bot}.json`;
@@ -397,6 +412,25 @@ function latestFor(botId) {
     if (f) return JSON.parse(fs.readFileSync(path.join(RUNS_DIR, f), 'utf8'));
   } catch {}
   return null;
+}
+
+// What the Apply strip and the banner show (app/lib/apply-progress.js).
+// The banner's note titles come from git, so they are kept per apply.json.
+let bannerCache = { at: null, banner: null };
+function improveProgress() {
+  const P = require('./apply-progress'), AS = require('./apply-state');
+  const last = AS.read(STATE_DIR);
+  const view = P.view(latestFor('apply'), last, { fresh: AS.switching(STATE_DIR), devHead: devHead() });
+  if (!last || bannerCache.at !== last.at) {
+    const done = last && last.state && last.state !== 'switching';
+    bannerCache = { at: last ? last.at : null, banner: P.banner(last, done ? P.titles(KIT_DIR, last) : []) };
+  }
+  return { view, banner: bannerCache.banner };
+}
+// The dev copy's commit now, or null when there is no dev copy.
+function devHead() {
+  const dir = require('./apply').devDir(STATE_DIR);
+  try { return fs.existsSync(path.join(dir, '.git')) ? require('./kit-git').head(dir) : null; } catch { return null; }
 }
 
 // --- "your move" --------------------------------------------------------------
@@ -760,19 +794,27 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     checkUpdate();
     return json(res, 200, whatsNew), true;
   }
+  // Apply starts in the background and returns at once; the panel follows
+  // it with GET /api/improve/progress (app/lib/apply-progress.js).
   if (p === '/api/improve/apply' && req.method === 'POST') {
+    if (applyBusy()) return json(res, 409, { error: 'Apply is already running', progress: improveProgress() }), true;
     const busy = [...runs.values()].find((r) => r.status === 'running');
     if (busy) return json(res, 409, { error: `${busy.bot} is running; Apply after it ends` }), true;
     const b = await readBody(req);
     const run = newRun({ id: 'apply' });
-    logLine(run, 'Apply: checking the change before it reaches the app');
-    try {
-      const r = await require('./apply').apply({ ...applyCtx(), confirm: typeof b.confirm === 'string' ? b.confirm : null, log: (m) => logLine(run, m) });
-      finish(run, r.status === 'error' ? 'error' : r.status === 'confirm' ? 'warn' : 'ok', r.summary, r);
-      return json(res, 200, { ...r, runId: run.id }), true;
-    } catch (e) { failRun(run, e); return json(res, 500, { error: e.message }), true; }
+    const confirm = typeof b.confirm === 'string' ? b.confirm : null;
+    require('./apply-progress').runApply(run, { apply: (o) => require('./apply').apply({ ...applyCtx(), ...o }), logLine, finish, save: saveRun }, confirm);
+    return json(res, 200, { status: 'started', runId: run.id, progress: improveProgress() }), true;
+  }
+  if (p === '/api/improve/progress' && req.method === 'GET') return json(res, 200, improveProgress()), true;
+  // Cancel on a confirm, or close an error: the strip stops showing that run.
+  if (p === '/api/improve/apply/dismiss' && req.method === 'POST') {
+    const r = latestFor('apply');
+    if (r && r.status !== 'running') { r.dismissed = true; saveRun(r); }
+    return json(res, 200, improveProgress()), true;
   }
   if (p === '/api/improve/discard' && req.method === 'POST') {
+    if (applyBusy() || require('./apply-state').holder(STATE_DIR)) return json(res, 409, { error: 'Apply is using the dev copy; Discard after it ends' }), true;
     try { return json(res, 200, require('./improve').discard(KIT_DIR, STATE_DIR)), true; } catch (e) { return json(res, 400, { error: e.message }), true; }
   }
   if (p === '/api/improve/undo' && req.method === 'POST') {
@@ -916,6 +958,7 @@ async function handle(req, res, url, { json, readBody, claudeBin }) {
     if (!bot.run) return json(res, 409, { error: `${bot.name} is not built yet` }), true;
     const busy = [...runs.values()].find((r) => r.bot === bot.id && r.status === 'running');
     if (busy) return json(res, 409, { error: `${bot.name} is already running`, runId: busy.id }), true;
+    if (applyBusy()) return json(res, 409, { error: APPLY_HOLD }), true;
     const body = await readBody(req).catch(() => ({}));
     const run = newRun(bot);
     CLAUDE_BIN = CLAUDE_BIN || claudeBin;
