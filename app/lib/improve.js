@@ -76,7 +76,7 @@ const PROMPT = (vault, own, notes = []) => [
   '4. If it breaks a rule in PRINCIPLES.md, say so plainly, name the rule id, and say why the rule exists. Then offer the nearest version that keeps the rule. Do not build the rule-breaking version, however the owner asks. A rule changes only when the owner asks to change PRINCIPLES.md itself; then say what that rule protects, and make that edit as its own commit. Apply will show it to them separately.',
   '5. Wait until the owner agrees with the plan. Then build it here, in small commits, with tests, following the recipe.',
   '6. Run the tests: bash tests/run.sh (about 2 minutes; the sandbox cannot open a terminal, so the few session tests that need one are skipped here and Apply runs them). Fix what fails. Never delete or weaken a test to make it pass; if a test is wrong, say why and let the owner decide (Apply shows test changes to them).',
-  '7. If the owner can see the change, write a feature note for it: features/my-<short-name>.md, in the format of features/README.md (the id starts with "my-"). app/test/features.test.js checks it.',
+  '7. If the owner can see the change, write a feature note for it: features/my-<short-name>.md, in the format of features/README.md (the id starts with "my-"). It lists no commit ids (commits: []): Apply replays your commits on newer code with new ids. Put the note in the commit with the change\'s main files. app/test/features.test.js checks it.',
   '8. Commit everything (Apply ships commits only). Then tell the owner to press Apply. You never apply, push, update or restart anything yourself.',
   '',
   'Ask one question at a time. Short, plain sentences.',

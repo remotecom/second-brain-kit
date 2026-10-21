@@ -126,6 +126,10 @@ function check(dir) {
     if (!n.body) errors.push(`${at}: no text under the frontmatter (two or three sentences a user can read)`);
     for (const p of n.principles) if (!ids.has(p)) errors.push(`${at}: principle "${p}" is not in PRINCIPLES.md`);
     if (n.variant != null && !['as-is', 'customized'].includes(n.variant)) errors.push(`${at}: variant must be as-is or customized`);
+    // A personal note lists no commit ids: Apply replays this copy's commits
+    // on newer code and gives them new ids, so a listed id goes stale. The
+    // commit that adds the note is the one that counts.
+    if (PERSONAL.test(n.id) && n.commits.length) errors.push(`${at}: a my- note lists no commits (commits: []); Apply replays your commits with new ids, so listed ids go stale. Put the note in the commit with its main change.`);
     // A personal note, or a port of an upstream one, has commits that live
     // only in this copy or files that the port changed: no file check.
     if (PERSONAL.test(n.id) || n.ported_from) continue;

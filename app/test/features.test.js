@@ -64,6 +64,20 @@ test('check names each problem: id, kind, rule id, a file no commit changed', ()
   assert.match(errs, /file a\.txt is not changed/);
 });
 
+test('check: a my- note lists no commit ids (a replay gives them new ids); other notes still may', () => {
+  const w = world();
+  const sha = commit(w.up, { 'b.txt': 'b2\n' }, 'change b');
+  commit(w.up, {
+    'features/my-ids.md': note('my-ids', { files: ['b.txt'], commits: [sha.slice(0, 7)] }),
+    'features/my-none.md': note('my-none', { files: ['b.txt'] }),
+    'features/up.md': note('up', { files: ['b.txt'], commits: [sha.slice(0, 7)] }),
+    'features/port.md': note('port', { files: ['b.txt'], commits: ['deadbee'], extra: 'ported_from: deadbee\nvariant: as-is\n' }),
+  }, 'notes');
+  const errs = F.check(w.up);
+  assert.equal(errs.length, 1, errs.join('\n'));
+  assert.match(errs[0], /my-ids\.md: a my- note lists no commits/);
+});
+
 test('check: the commit that adds the note counts, and so do uncommitted changes before that commit', () => {
   const w = world();
   write(w.up, 'c.txt', 'c\n');
