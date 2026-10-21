@@ -60,6 +60,9 @@ nothing changed.
 - **Gmail** must re-apply the threshold client-side; its `after:` operator is
   date-granular (`YYYY/MM/DD`) and cannot express a timestamp.
 - **Calendar** has no separate body fetch, so step 3 is a no-op there.
+- **Notion** has no pre-fetch skip: every page in the window is fetched each
+  run, and the content hash saves the write. The one skip is the transcript
+  fetch (see the Notion op, step 6).
 - **Calendar** also has no content-hash skip, for the same reason as Slack —
   the in-window overwrite is what self-heals reschedules and cancellations.
 
@@ -175,6 +178,19 @@ When you say **"sync notion"**:
 5. **Expand comments.** `notion-get-comments` on **every** page in the union.
 6. **Fetch content.** Top-level blocks per page (don't recurse into child pages
    in v1 — they land in their own files if you touched them).
+   **Meeting-note transcripts** (`include_meeting_transcripts`). The first
+   fetch returns a "Transcript omitted" line in the transcript section. For
+   those pages only, fetch again with `include_transcript: true`, 3 pages per
+   batch. Skip the second fetch when the raw file already has the transcript
+   and the same `last_edited_time`. Replace secrets as in Slack. Cut a
+   transcript over `max_transcript_chars` at a line break and end it with
+   `[truncated at N chars, full transcript at the url above]`. Pages listed in
+   `exclude_transcripts_for` (page ID or parent database title) keep Notion's
+   placeholder. Never drop talk for being off-topic: that is ingest's call.
+   When the second fetch fails, hold the page for the next run; after 3 runs,
+   keep the old raw transcript, or write the placeholder with
+   `transcript_fetched: false`. `backfill_transcripts` re-fetches up to 10
+   old placeholder pages per run until none are left.
 7. **Write per-resource files with content-hash skip** (same discipline as
    Linear). UUID filenames; title in frontmatter; `in_scope_reasons` records why
    each page was pulled.

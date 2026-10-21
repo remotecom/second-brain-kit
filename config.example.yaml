@@ -90,6 +90,20 @@ sources:
     watched: []
       # - name: "Team meeting notes"
       #   signal_type: "database"
+    # Meeting notes: also fetch the transcript (one extra call per meeting
+    # page). Off: raw keeps Notion's "Transcript omitted" line.
+    include_meeting_transcripts: true
+    # Transcripts over this length are cut at a line break with an explicit
+    # marker. A DECLARED cap, never a per-page judgment by the sync.
+    max_transcript_chars: 60000
+    # One time: re-fetch up to 10 old meeting pages a run whose raw file
+    # still says "Transcript omitted". The log says when none are left.
+    backfill_transcripts: true
+    # Transcripts never synced, by page ID or by parent database title.
+    # Talk after a meeting ends can be personal; excluding a page or a
+    # database is auditable, judging each transcript would not be. Secrets
+    # in transcripts are always replaced (as in Slack).
+    exclude_transcripts_for: []
   gdrive:
     enabled: true
     window_days: 4

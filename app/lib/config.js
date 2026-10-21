@@ -180,6 +180,10 @@ function validate(vault) {
     if (!(Number.isInteger(s.window_days) && s.window_days >= 1 && s.window_days <= 30)) add('error', `sources.${name}.window_days`, `sources.${name}.window_days must be a whole number from 1 to 30`);
   }
   if (src.gcal.enabled && !(src.gcal.calendars || []).length) add('error', 'sources.gcal.calendars', 'list at least one calendar under sources.gcal.calendars, or set enabled: false');
+  const nt = src.notion || {};
+  for (const k of ['include_meeting_transcripts', 'backfill_transcripts']) if (typeof nt[k] !== 'boolean') add('error', `sources.notion.${k}`, `sources.notion.${k} must be true or false`);
+  if (!(Number.isInteger(nt.max_transcript_chars) && nt.max_transcript_chars >= 1000)) add('error', 'sources.notion.max_transcript_chars', 'sources.notion.max_transcript_chars must be a whole number of 1000 or more');
+  if (!Array.isArray(nt.exclude_transcripts_for)) add('error', 'sources.notion.exclude_transcripts_for', 'sources.notion.exclude_transcripts_for must be a list');
   if (src.linear.enabled) {
     const sc = src.linear.scope || {};
     const n = [sc.initiative, sc.team].filter(Boolean).length;

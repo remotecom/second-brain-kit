@@ -24,10 +24,94 @@ const { verify, commit } = require('./sync');
 const { requireOwner, getConfig } = require('./config');
 const { readPending, writePending } = require('./ledger');
 const { tool } = require('./connectors');
+const { redact } = require('./redact');
 
 const DAY = 86400000;
 const COMMENT_TRIES = 3;
 const COMMENTS_UNFETCHED = `_Comments not fetched: the connector returned no result in ${COMMENT_TRIES} consecutive runs._`;
+
+// Meeting-note transcripts. notion-fetch returns a placeholder line inside the
+// transcript section unless the call has include_transcript: true, so a
+// meeting page is found by pass 1 and fetched again by pass 2:
+//
+//   pass 1 {id} ──▶ placeholder? ── no ──────────────────────────▶ render
+//                       │ yes
+//                       ├─ excluded (exclude_transcripts_for) ──────▶ render, placeholder kept
+//                       ├─ raw has it, same edit time ─ reuse ──────▶ render
+//                       └─ pass 2 {id, include_transcript} ─ ok ────▶ render
+//                                                         └ none ─▶ pending (COMMENT_TRIES runs),
+//                                                                   then old raw transcript or placeholder
+// render: redact() secrets, then cut at max_transcript_chars with a marker.
+// Nothing is dropped for being off-topic: relevance is ingest's job (raw-purity).
+const TRANSCRIPT_RE = /(<meeting-notes-section-transcript>\n?)([\s\S]*?)(\n?<\/meeting-notes-section-transcript>)/g;
+const OMITTED_RE = /^Transcript omitted\. To load it, fetch again with include_transcript/;
+const CUT_RE = /\[truncated at (\d+) chars, full transcript at the url above\]$/;
+const BACKFILL_PER_RUN = 10;
+const TRANSCRIPT_BATCH = 3; // one transcript can be ~54k chars; 20 per context overflowed the plan
+
+const transcriptsOf = (text) => [...String(text || '').matchAll(TRANSCRIPT_RE)].map((m) => m[2]);
+const isOmitted = (t) => OMITTED_RE.test(String(t).trim());
+const needsTranscript = (text) => transcriptsOf(text).some(isOmitted);
+const mapTranscripts = (text, fn) => { let i = 0; return String(text).replace(TRANSCRIPT_RE, (m, a, t, b) => a + fn(t, i++) + b); };
+
+// A declared cap, never a judgment: cut at the last line break at or under max.
+function capTranscript(t, max) {
+  if (t.length <= max || CUT_RE.test(t.trimEnd())) return { text: t, cut: CUT_RE.test(t.trimEnd()) };
+  const nl = t.lastIndexOf('\n', max);
+  return { text: `${t.slice(0, nl > 0 ? nl : max).trimEnd()}\n\n[truncated at ${max} chars, full transcript at the url above]`, cut: true };
+}
+
+// Redact and cap every fetched transcript in a page body. Placeholders stay
+// as Notion wrote them. Safe to run twice on the same text.
+function processTranscripts(body, max) {
+  let cut = false, redacted = 0;
+  const text = mapTranscripts(body, (t) => {
+    if (isOmitted(t)) return t;
+    const c = capTranscript(redact(t, () => { redacted++; }), max);
+    cut = cut || c.cut;
+    return c.text;
+  });
+  return { text, cut, redacted };
+}
+
+// The transcripts in an existing raw file, if they can stand in for a fetch:
+// none is a placeholder, a cut one was cut at today's cap, and (when edited
+// is given) the file has the same last_edited_time. Otherwise null.
+function storedTranscripts(fileText, edited, max) {
+  const ts = transcriptsOf(fileText);
+  if (!ts.length || ts.some(isOmitted)) return null;
+  if (ts.some((t) => { const m = t.trimEnd().match(CUT_RE); return m && Number(m[1]) !== max; })) return null;
+  if (edited !== undefined && (fileText.match(/^last_edited_time: (.*)$/m) || [])[1] !== q(edited)) return null;
+  return ts;
+}
+
+// The exclude_transcripts_for entry that matches a page (its id, or its
+// parent database's title), or null.
+function excludedBy(id, parentDb, list) {
+  return (list || []).map(String).find((e) => (/^[0-9a-f]{32}$/i.test(flat(e)) ? flat(e).toLowerCase() === flat(id).toLowerCase() : parentDb !== null && e === parentDb)) || null;
+}
+
+// One-time backfill: raw pages synced before transcripts were fetched still
+// hold the placeholder. Read only; the sync re-fetches them like any page.
+// Skips pages that are excluded or that already gave up (transcript_fetched: false).
+function backfillCandidates(vault, exclude) {
+  const dir = path.join(vault, 'notion', 'pages');
+  let names = []; try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.md')).sort(); } catch {}
+  const out = [];
+  for (const n of names) {
+    let text; try { text = fs.readFileSync(path.join(dir, n), 'utf8'); } catch { continue; }
+    if (!text.includes('Transcript omitted') || !needsTranscript(text)) continue;
+    if (/^transcript_fetched: false$/m.test(text)) continue;
+    const f = (k) => (text.match(new RegExp(`^${k}: (.*)$`, 'm')) || [])[1];
+    const unq = (v) => { try { return JSON.parse(v); } catch { return null; } };
+    const id = f('notion_id');
+    if (!id) continue;
+    if (excludedBy(id, unq(f('parent_database')), exclude)) continue;
+    const reasons = String(f('in_scope_reasons') || '').replace(/[[\]\s]/g, '').split(',').filter(Boolean);
+    out.push({ id, title: unq(f('title')), url: unq(f('url')), reasons });
+  }
+  return out;
+}
 
 const q = (v) => (v === null || v === undefined || v === '' ? 'null' : JSON.stringify(String(v)));
 const flat = (id) => String(id).replace(/-/g, '');
@@ -72,20 +156,24 @@ function renderComments(xml) {
 }
 
 // One page's raw file from its notion-fetch result. commentsText null means
-// the comments were never fetched (declared placeholder). Returns
-// { md, edited } or { error } when the result has no body to write.
-function renderPage(id, meta, page, commentsText) {
+// the comments were never fetched (declared placeholder). opts.maxTranscript
+// turns on transcript redact + cap; opts.transcriptUnfetched marks a page
+// written with Notion's placeholder after the transcript fetch kept failing.
+// Returns { md, edited, cut, redacted } or { error } when there is no body.
+function renderPage(id, meta, page, commentsText, opts = {}) {
   const text = String(page.text || '');
   // A database row with no body comes back as <blank-page>; its properties
   // are the content, so an empty body is correct there.
   let body = (text.match(/<content>\n?([\s\S]*?)\n?<\/content>/) || [])[1];
   if (body === undefined && /<blank-page>/.test(text)) body = '';
   if (body === undefined) return { error: 'no <content> block' };
+  let cut = false, redacted = 0;
+  if (opts.maxTranscript) ({ text: body, cut, redacted } = processTranscripts(body, opts.maxTranscript));
   let props = {};
   try { props = JSON.parse((text.match(/<properties>\n?([\s\S]*?)\n?<\/properties>/) || [])[1] || '{}'); } catch {}
   const title = page.title || props.title || meta.title || 'Untitled';
   const parentDb = parentDatabase(text);
-  const edited = page.page_last_edited_at || tsDay(meta.timestamp) || null;
+  const edited = editedOf(page, meta);
   const extraProps = Object.entries(props).filter(([k]) => k !== 'title');
   const fm = [
     '---',
@@ -105,11 +193,50 @@ function renderPage(id, meta, page, commentsText) {
     `in_scope_reasons: [${[...meta.reasons].sort().join(', ')}]`,
     // Notion itself cuts very large pages; say so rather than imply a full copy.
     ...(page.truncated ? ['truncated: true', `unknown_block_count: ${page.unknown_block_count || 0}`] : []),
+    ...(cut ? ['transcript_truncated: true'] : []),
+    ...(opts.transcriptUnfetched ? ['transcript_fetched: false'] : []),
     'tags:', '  - notion', `  - notion/${parentDb ? 'database_row' : 'page'}`,
     '---',
   ].join('\n');
   const md = `${fm}\n\n# ${title}\n\n${body.trim()}\n\n## Comments\n${commentsText === null ? COMMENTS_UNFETCHED : renderComments(commentsText)}\n`;
-  return { md, edited };
+  return { md, edited, cut, redacted };
+}
+
+const editedOf = (page, meta) => page.page_last_edited_at || tsDay(meta.timestamp) || null;
+
+// Which meeting pages need what. plan: id -> 'fetch' | 'reuse' | 'excluded'.
+// hits: the exclusion keys that matched (for exclusions.report).
+function planTranscripts(ids, pass1, rawOf, tx, metaOf) {
+  const plan = new Map(), hits = new Set();
+  for (const id of ids) {
+    const p = pass1(id);
+    if (!p || !needsTranscript(p.text)) continue;
+    const ex = excludedBy(id, parentDatabase(p.text), tx.exclude);
+    if (ex) { plan.set(id, 'excluded'); hits.add(`notion:transcript:${ex}`); continue; }
+    const s = storedTranscripts(rawOf(id), editedOf(p, metaOf(id)), tx.max);
+    plan.set(id, s && s.length === transcriptsOf(p.text).length ? 'reuse' : 'fetch');
+  }
+  return { plan, hits };
+}
+
+// The page to render for one id, given its plan state and pass-2 result.
+// { page, state } to render; { hold: true } to leave it for the next run.
+// After COMMENT_TRIES failed runs: the raw file's old transcript if it has
+// one (a full transcript is never replaced by a placeholder), else Notion's
+// placeholder with transcript_fetched: false.
+function pickTranscriptPage(state, page, full, rawText, meta, max) {
+  if (state === 'excluded') return { page, state: 'excluded' };
+  if (state === 'reuse') {
+    const ts = storedTranscripts(rawText, editedOf(page, meta), max);
+    if (ts) return { page: { ...page, text: mapTranscripts(page.text, (t, i) => (i < ts.length ? ts[i] : t)) }, state: 'reused' };
+    state = 'fetch';
+  }
+  if (state !== 'fetch') return { page };
+  if (full && !needsTranscript(full.text)) return { page: full, state: 'fetched' };
+  if ((meta.attempts || 0) + 1 < COMMENT_TRIES) return { hold: true };
+  const old = storedTranscripts(rawText, undefined, max);
+  if (old) return { page: { ...page, text: mapTranscripts(page.text, (t, i) => (i < old.length ? old[i] : t)) }, state: 'gaveUp' };
+  return { page, state: 'gaveUp', unfetched: true };
 }
 
 function parentDatabase(text) {
@@ -202,18 +329,41 @@ async function syncNotionMcp(run, ctx) {
   for (const p of pendingIn) if (!pages.has(flat(p.id))) pages.set(flat(p.id), { ...p, reasons: new Set(p.reasons || []) });
   log(`${pages.size} page(s) in scope${pendingIn.length ? ` (incl. pending from an earlier run)` : ''}`);
 
+  // 1c. Transcript backfill (once): old raw pages that still hold Notion's placeholder.
+  const nc = cfg.sources.notion;
+  const tx = { on: nc.include_meeting_transcripts === true, max: nc.max_transcript_chars, exclude: nc.exclude_transcripts_for || [] };
+  if (tx.on && nc.backfill_transcripts) {
+    const cands = backfillCandidates(vault, tx.exclude).filter((c) => !pages.has(flat(c.id)));
+    for (const c of cands.slice(0, BACKFILL_PER_RUN)) pages.set(flat(c.id), { id: c.id, title: c.title, url: c.url, timestamp: null, reasons: new Set(c.reasons) });
+    log(cands.length ? `transcript backfill: ${Math.min(cands.length, BACKFILL_PER_RUN)} of ${cands.length} old meeting page(s) this run` : 'transcript backfill: done, no old page is missing its transcript');
+  }
+
   // 2. Detail: body + comments, every page.
   const ids = [...pages.keys()];
   const fe = await collect(ctx, run, T('notion-fetch'), ids.map((id) => ({ args: { id } })), { pageOf: (j) => (j && (j.text || j.metadata) ? { items: [j], next: null } : null), batch: 20, label: 'fetch' });
   const gc = await collect(ctx, run, T('notion-get-comments'), ids.map((id) => ({ args: { page_id: id, include_all_blocks: true } })), { pageOf: (j) => (j && !j.error && (typeof j.text === 'string' || 'suggested_edits_status' in j) ? { items: [{ text: j.text || '' }], next: null } : null), batch: 20, label: 'comments' });
   cost += fe.cost + gc.cost; unfinished.push(...fe.unfinished, ...gc.unfinished);
+  const pass1 = (id) => (fe.results.get(fe.keyOf({ id })) || [])[0];
+  const rawOf = (id) => { try { return fs.readFileSync(path.join(vault, filenameFor(vault, id)), 'utf8'); } catch { return ''; } };
+
+  // 2b. Transcripts: a second fetch, only for meeting pages that need one.
+  const tplan = tx.on ? planTranscripts(ids, pass1, rawOf, tx, (id) => pages.get(id)) : { plan: new Map(), hits: new Set() };
+  const want = ids.filter((id) => tplan.plan.get(id) === 'fetch');
+  let tr = null;
+  if (want.length) {
+    tr = await collect(ctx, run, T('notion-fetch'), want.map((id) => ({ args: { id, include_transcript: true } })), { pageOf: (j) => (j && (j.text || j.metadata) ? { items: [j], next: null } : null), batch: TRANSCRIPT_BATCH, label: 'transcripts' });
+    cost += tr.cost; unfinished.push(...tr.unfinished);
+  }
+  if (tx.on && tx.exclude.length) require('./exclusions').report(vault, tx.exclude.map((e) => `notion:transcript:${e}`), tplan.hits);
+  const pass2 = (id) => (tr ? (tr.results.get(tr.keyOf({ id, include_transcript: true })) || [])[0] : undefined);
+  const tcount = { meeting: tplan.plan.size, fetched: 0, reused: 0, excluded: 0, held: 0, gaveUp: 0, cut: 0, redacted: 0 };
 
   // 3. Render.
   const files = new Map();
   let maxEdited = wm || 0;
   for (const id of ids) {
     const meta = pages.get(id);
-    const page = (fe.results.get(fe.keyOf({ id })) || [])[0];
+    let page = pass1(id);
     if (!page) continue;
     const comments = (gc.results.get(gc.keyOf({ page_id: id, include_all_blocks: true })) || [])[0];
     // No comments result means we don't know; writing "_No comments._" would
@@ -222,11 +372,18 @@ async function syncNotionMcp(run, ctx) {
     // placeholder instead of retrying it forever (one page did this 09-30 → 10-02).
     const gaveUp = !comments && (meta.attempts || 0) + 1 >= COMMENT_TRIES;
     if (!comments && !gaveUp) continue;
-    const r = renderPage(id, meta, page, gaveUp ? null : comments.text);
+    const pick = pickTranscriptPage(tplan.plan.get(id), page, pass2(id), rawOf(id), meta, tx.max);
+    if (pick.hold) { tcount.held++; continue; }
+    page = pick.page;
+    if (pick.state) tcount[pick.state]++;
+    const r = renderPage(id, meta, page, gaveUp ? null : comments.text, tx.on ? { maxTranscript: tx.max, transcriptUnfetched: pick.unfetched } : {});
     if (r.error) { unfinished.push(`fetch ${id}: ${r.error}`); continue; }
+    if (r.cut) tcount.cut++;
+    tcount.redacted += r.redacted || 0;
     const t = Date.parse(r.edited); if (Number.isFinite(t) && t > maxEdited) maxEdited = t;
     files.set(filenameFor(vault, id), r.md);
   }
+  if (tx.on && tcount.meeting) log(`transcripts: ${tcount.meeting} meeting page(s) · ${tcount.fetched} fetched · ${tcount.reused} unchanged (no fetch) · ${tcount.excluded} excluded · ${tcount.held} held for next run · ${tcount.gaveUp} written without (gave up) · ${tcount.cut} cut at ${tx.max} chars · ${tcount.redacted} credential(s) redacted`);
   log(`rendered ${files.size} page file(s); ${unfinished.length} unfinished`);
   for (const u of unfinished.slice(0, 8)) log(`gap: ${u}`);
 
@@ -249,4 +406,7 @@ async function syncNotionMcp(run, ctx) {
     { pages: pages.size, unfinished: unfinished.length }, cost);
 }
 
-module.exports = { syncNotionMcp, renderComments, renderPage, filenameFor };
+module.exports = {
+  syncNotionMcp, renderComments, renderPage, filenameFor,
+  needsTranscript, capTranscript, processTranscripts, storedTranscripts, excludedBy, backfillCandidates, planTranscripts, pickTranscriptPage,
+};
