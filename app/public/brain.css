@@ -188,3 +188,18 @@ body.sp-dragging #sp-term { pointer-events: none; }
 .nav-item.child.dragging { opacity: .45; }
 .sp-name { cursor: text; }
 .sp-name:hover { text-decoration: underline dotted; }
+
+/* Make me better: the Apply strip under the session header, and the banner
+   that says how the last Apply or Undo ended. */
+.sp-apply { padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 13px; background: #17283d; }
+.sp-apply.ask { background: #3a2f17; }
+.sp-apply.bad { background: #3a1c1f; }
+.sp-apply.ok { background: #16301d; }
+.sp-apply .sm { font-size: 12px; margin-top: 4px; }
+.sp-apply ul { margin: 4px 0 0 18px; padding: 0; max-height: 140px; overflow-y: auto; }
+.sp-apply .row { display: flex; gap: 6px; margin-top: 8px; }
+#apply-banner { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 50; max-width: min(760px, calc(100% - 32px));
+  display: flex; align-items: flex-start; gap: 12px; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line); font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+#apply-banner.ok { background: #16301d; color: var(--ok); }
+#apply-banner.bad { background: #3a1c1f; color: var(--err); }
+#apply-banner button { flex: none; }

@@ -8,7 +8,10 @@
   let cur = null;      // the session record
   let term = null, fit = null, ws = null;
   let suggested = '';
-  let applying = false;
+  // Make me better's Apply, Undo and Discard, in a strip under the header.
+  // The server says what to show (GET /api/improve/progress); ask and note
+  // are this tab's own: an "are you sure" step, and a one-line result.
+  let prog = null, ask = null, note = null, pollT = null, baseline = null;
   const TOKEN = window.BRAIN_TOKEN;
   const strip = (t) => t.replace(/\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07/g, '');
 
@@ -30,7 +33,7 @@
     return `<header>
       <div class="sp-title"><span class="dot ${s.running ? 'running' : 'never'}"></span><b class="sp-name" data-sp="rename" title="Rename">${esc(s.title)}</b> <span class="muted">${esc(s.model)} · ${esc(s.state)}</span></div>
       <span class="spacer"></span>
-      ${s.state === 'done' ? '' : s.kind === 'improve' ? `<button class="small ${applying ? 'ghost' : ''}" data-sp="apply" ${applying ? 'disabled' : ''} title="Test this change, then switch the app to it. If the app does not come back, it goes back by itself.">${applying ? 'Applying…' : 'Apply'}</button>
+      ${s.state === 'done' ? '' : s.kind === 'improve' ? `<button class="small ${busy() ? 'ghost' : ''}" data-sp="apply" ${busy() ? 'disabled' : ''} title="Test this change, then switch the app to it. If the app does not come back, it goes back by itself.">${busy() ? 'Applying…' : 'Apply'}</button>
       <button class="ghost small" data-sp="discard" title="Throw away the changes the app does not run yet">Discard</button>
       <button class="ghost small" data-sp="undo" title="Go back to the version before the last Apply">Undo last Apply</button>
       <button class="ghost small" data-sp="sleep" title="Stop the process; keep the session to continue later">Sleep</button>
@@ -39,6 +42,7 @@
       <button class="ghost small" data-sp="save" title="End the session and save it to the vault (projects/sessions/). The next ingest picks it up.">Save &amp; close</button>`}
       <button class="ghost small" data-sp="hide" title="Hide the panel; the session keeps running (a tab on the right brings it back)">Hide ▸</button>
     </header>
+    ${s.kind === 'improve' && s.state !== 'done' ? applyStrip() : ''}
     ${s.state === 'done' ? `<div class="sp-done">✓ Done: ${esc(s.outcome || 'closed')}. ${s.summary ? esc(s.summary) + '. This panel closes in a moment.' : 'Its transcript is on the Sessions page.'}</div>`
       : `${outs ? `<div class="sp-outcomes"><span class="muted">Outcome:</span> ${outs}</div>` : ''}<div class="sp-hint muted">${s.kind === 'improve' ? 'This session works in your own copy of the app, not in the app you use. Nothing changes until you press Apply. The first time, Claude asks if you trust the folder: pick "Yes, I trust this folder".' : 'First time in this vault, Claude asks if you trust the folder: pick "Yes, I trust this folder".'} Drag the left edge to resize.</div>`}`;
   }
@@ -47,6 +51,43 @@
     const p = el();
     const h = p.querySelector('.sp-head');
     if (h) h.innerHTML = header();
+    if (fit) setTimeout(() => fit && fit.fit(), 0); // the strip changes the header's height
+  }
+
+  const busy = () => { const st = prog && prog.view && prog.view.state; return st === 'running' || st === 'switching'; };
+  function since(iso) {
+    const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+    return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
+  }
+  const list = (xs) => `<ul>${xs.slice(0, 12).map((x) => `<li><code>${esc(x)}</code></li>`).join('')}${xs.length > 12 ? `<li class="muted">and ${xs.length - 12} more</li>` : ''}</ul>`;
+
+  // One strip for Apply, Undo and Discard. Each state says what happens now
+  // and what the owner can do; nothing hides in the log or in a popup.
+  function applyStrip() {
+    if (ask) return `<div class="sp-apply ask">${esc(ask.text)}<div class="row"><button class="small" data-sp="ask-yes">${esc(ask.yes)}</button><button class="ghost small" data-sp="ask-no">Cancel</button></div></div>`;
+    if (note) return `<div class="sp-apply ${note.kind}">${esc(note.text)}<div class="row"><button class="ghost small" data-sp="note-close">Close</button></div></div>`;
+    const v = prog && prog.view;
+    if (!v) return '';
+    if (v.state === 'running') {
+      return `<div class="sp-apply run"><b>Apply: ${esc(v.step.label)}</b> <span class="muted">· ${since(v.startedAt)} so far</span>
+        <div class="muted sm">${esc(v.line || '')}</div>
+        <div class="muted sm">Do not change the dev copy until this ends. Bots and the Morning run wait until then.</div></div>`;
+    }
+    if (v.state === 'switching') return `<div class="sp-apply run"><b>${esc(v.step.label)}.</b> This page reloads when the app is back. If the new code does not come back, the app goes back by itself.</div>`;
+    if (v.state === 'waiting') {
+      return `<div class="sp-apply ask"><b>Waiting for you.</b> The tests in the dev copy pass. This change touches the guard rails, so check these before it goes on:
+        ${v.guards.length ? `<div class="sm">Rules, tests or safety code it changes:</div>${list(v.guards)}` : ''}
+        ${v.trustedFailures.length ? `<div class="sm">Tests your app trusted until now that fail with this change:</div>${list(v.trustedFailures)}` : ''}
+        ${v.canConfirm ? '' : '<div class="sm">The dev copy changed after this check. Press Apply again to check the new version.</div>'}
+        <div class="row">${v.canConfirm ? '<button class="small" data-sp="apply-confirm">Confirm and apply</button>' : '<button class="small" data-sp="apply">Apply again</button>'}<button class="ghost small" data-sp="apply-dismiss">Cancel</button></div></div>`;
+    }
+    if (v.state === 'error') {
+      return `<div class="sp-apply bad"><b>Apply stopped. Nothing was switched.</b> ${esc(v.summary || '')}
+        ${v.failures.length ? `<div class="sm">What failed:</div>${list(v.failures)}` : ''}
+        <div class="row"><button class="small" data-sp="apply-fix" title="Puts the error in the session's prompt. Press Enter there to send it.">Ask the session to fix it</button><button class="ghost small" data-sp="apply-dismiss">Close</button></div></div>`;
+    }
+    if (v.state === 'stopped') return `<div class="sp-apply bad"><b>Apply stopped.</b> ${esc(v.summary || '')}<div class="row"><button class="ghost small" data-sp="apply-dismiss">Close</button></div></div>`;
+    return '';
   }
 
   async function show(s) {
@@ -137,7 +178,7 @@
     }
     const a = t.dataset.sp;
     if (a === 'hide') return hide();
-    if (a === 'apply' || a === 'discard' || a === 'undo') return improveAction(a);
+    if (/^(apply|apply-confirm|apply-dismiss|apply-fix|discard|undo|ask-yes|ask-no|note-close)$/.test(a)) return improveAction(a);
     if (a === 'sleep' || a === 'close' || a === 'save') {
       if (a === 'close' && !confirm('Close this session? Nothing is saved to the vault. Its transcript stays on the Sessions page.')) return;
       if (a === 'save' && !confirm('Save this session to the vault and close it?\n\nIt goes to projects/sessions/ as raw, word for word (credentials redacted). The next ingest folds it into the wiki.')) return;
@@ -156,45 +197,81 @@
 
   // Make me better: the app (not the model) applies, discards and undoes.
   async function improveAction(a) {
-    if (a === 'discard') {
-      if (!confirm('Throw away every change in the dev copy that the app does not run yet? This cannot be undone.')) return;
-      const r = await api('/api/improve/discard', { method: 'POST', body: '{}' });
-      return alert(r.error ? r.error : `Discarded ${r.discarded} change(s). The dev copy matches the app again.`);
+    if (a === 'ask-no') { ask = null; return paintHeader(); }
+    if (a === 'note-close') { note = null; return paintHeader(); }
+    if (a === 'ask-yes') { const x = ask; ask = null; paintHeader(); return x.run(); }
+    if (a === 'discard') { note = null; ask = { text: 'Throw away every change in the dev copy that the app does not run yet? This cannot be undone.', yes: 'Discard', run: discard }; return paintHeader(); }
+    if (a === 'undo') { note = null; ask = { text: 'Go back to the version before the last Apply? The app restarts.', yes: 'Undo', run: undo }; return paintHeader(); }
+    if (a === 'apply') return startApply({});
+    if (a === 'apply-confirm') return startApply({ confirm: prog.view.sha });
+    if (a === 'apply-dismiss') { prog = await api('/api/improve/apply/dismiss', { method: 'POST', body: '{}' }); return paintHeader(); }
+    if (a === 'apply-fix') {
+      const v = prog.view;
+      const text = `Apply stopped: ${v.summary || ''}${v.failures.length ? ` What failed: ${v.failures.slice(0, 12).join('; ')}.` : ''} Find the cause and fix it. Do not weaken a test.`;
+      if (ws && ws.readyState === 1) { ws.send(JSON.stringify({ type: 'in', data: text.replace(/[\r\n]+/g, ' ') })); term.focus(); }
     }
-    if (a === 'undo') {
-      if (!confirm('Go back to the version before the last Apply? The app restarts.')) return;
-      const r = await api('/api/improve/undo', { method: 'POST', body: '{}' });
-      if (r.error || r.status === 'error') return alert(r.error || r.summary);
-      return waitForRestart(r.summary);
-    }
-    if (!confirm('Apply this change? The app runs the tests and starts the new code on the side first (about 2-4 minutes; the log shows each step). Then it switches over and restarts.')) return;
-    applying = true; paintHeader(); onChange(true);
-    let r = await api('/api/improve/apply', { method: 'POST', body: '{}' });
-    if (r.status === 'confirm') {
-      const lines = [
-        'This change touches the guard rails. Check these before you go on.',
-        ...(r.guards.length ? ['', 'Rules, tests or safety code it changes:', ...r.guards.map((g) => `  • ${g}`)] : []),
-        ...(r.trustedFailures.length ? ['', 'Tests your app trusted until now that fail with this change:', ...r.trustedFailures.map((g) => `  • ${g}`)] : []),
-        '', 'Apply anyway?',
-      ];
-      if (!confirm(lines.join('\n'))) { applying = false; paintHeader(); return; }
-      r = await api('/api/improve/apply', { method: 'POST', body: JSON.stringify({ confirm: r.sha }) });
-    }
-    applying = false; paintHeader();
-    if (r.error || r.status === 'error') return alert(`${r.error || r.summary}${r.failures && r.failures.length ? `\n\n${r.failures.slice(0, 12).join('\n')}` : ''}`);
-    if (r.status === 'switching') return waitForRestart(r.summary);
   }
 
-  // The app restarts on the new code: wait for a new process, then reload.
-  async function waitForRestart(msg) {
-    alert(`${msg}\n\nThis page reloads when the app is back.`);
-    let first = null;
-    try { first = (await (await fetch('/alive')).json()).startedAt; } catch {}
-    for (let i = 0; i < 90; i++) {
-      await new Promise((res) => setTimeout(res, 2000));
-      try { const j = await (await fetch('/alive')).json(); if (j.startedAt !== first && j.brain) return location.reload(); } catch {}
-    }
-    location.reload();
+  async function startApply(body) {
+    note = null;
+    baseline = await aliveAt();
+    const r = await api('/api/improve/apply', { method: 'POST', body: JSON.stringify(body) });
+    if (r.progress) prog = r.progress;
+    if (r.error && !(r.progress && r.progress.view.state !== 'idle')) note = { kind: 'bad', text: r.error };
+    paintHeader(); onChange();
+    follow();
+  }
+  async function undo() {
+    baseline = await aliveAt();
+    const r = await api('/api/improve/undo', { method: 'POST', body: '{}' });
+    if (r.error || r.status === 'error') { note = { kind: 'bad', text: r.error || r.summary }; return paintHeader(); }
+    follow();
+  }
+  async function discard() {
+    const r = await api('/api/improve/discard', { method: 'POST', body: '{}' });
+    note = r.error ? { kind: 'bad', text: r.error } : { kind: 'ok', text: `Discarded ${r.discarded} change(s). The dev copy matches the app again.` };
+    paintHeader(); onChange();
+  }
+
+  // The server's start time: it changes when the app restarts on new code.
+  async function aliveAt() {
+    try { const j = await (await fetch('/alive')).json(); return j.brain ? j.startedAt : null; } catch { return null; }
+  }
+
+  // Follow Apply or Undo: poll the server every 2 s while it runs or
+  // switches. A restart (a new start time) reloads the page; after the
+  // reload, init() follows on until apply.json says how it ended, so a
+  // rollback also shows. The server may be down for a moment mid-switch.
+  function follow() {
+    if (pollT) return;
+    const tick = async () => {
+      pollT = null;
+      let r = null;
+      try { r = await api('/api/improve/progress'); } catch {}
+      if (r && r.view) { prog = r; paintHeader(); }
+      const st = prog && prog.view && prog.view.state;
+      if (st === 'switching') {
+        const now = await aliveAt();
+        if (now && baseline && now !== baseline) return location.reload();
+        if (now && !baseline) baseline = now;
+      }
+      if (!r || st === 'running' || st === 'switching') { pollT = setTimeout(tick, 2000); return; }
+      onChange();
+      showBanner(r.banner);
+    };
+    pollT = setTimeout(tick, 500);
+  }
+
+  // How the last Apply or Undo ended, once, at the top of the page.
+  function showBanner(b) {
+    if (!b) return;
+    let seen = ''; try { seen = localStorage.getItem('brain.applySeen') || ''; } catch {}
+    if (seen === b.at) return;
+    let d = document.getElementById('apply-banner');
+    if (!d) { d = document.createElement('div'); d.id = 'apply-banner'; document.body.appendChild(d); }
+    d.className = b.kind;
+    d.innerHTML = `<span>${esc(b.text)}</span><button class="ghost small" title="Close">✕</button>`;
+    d.querySelector('button').onclick = () => { try { localStorage.setItem('brain.applySeen', b.at); } catch {} d.remove(); };
   }
 
   function hide() {
@@ -244,15 +321,13 @@
   window.SessionPanel = {
     init(o) {
       api = o.api; esc = o.esc; onChange = o.onChange || (() => {}); onDone = o.onDone || (() => {});
-      // After a restart: say once how the last Apply or Undo ended.
-      api('/api/improve').then((st) => {
-        const l = st && st.last;
-        if (!l || !l.mode || l.state === 'switching') return;
-        let seen = ''; try { seen = localStorage.getItem('brain.applySeen') || ''; } catch {}
-        if (seen === l.at) return;
-        try { localStorage.setItem('brain.applySeen', l.at); } catch {}
-        if (l.state === 'rolled-back') alert(`The last ${l.mode === 'undo' ? 'Undo' : 'Apply'} did not work, so the app went back to ${String(l.from).slice(0, 7)}.\n\nWhy: ${l.reason}\n\nYour change is still in the dev copy. Open Make me better to fix it.`);
-        else if (l.state === 'applied') alert(`${l.mode === 'undo' ? 'Undo' : 'Apply'} worked: the app now runs ${String(l.to).slice(0, 7)}.`);
+      // After a restart or in a second tab: show how the last Apply or Undo
+      // ended, and follow one that still runs or switches.
+      api('/api/improve/progress').then(async (r) => {
+        if (!r || !r.view) return;
+        prog = r;
+        if (busy()) { baseline = await aliveAt(); follow(); } else showBanner(r.banner);
+        paintHeader();
       }).catch(() => {});
     },
     // Start (or reopen) the session for an item. The server builds it.
