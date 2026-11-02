@@ -82,9 +82,6 @@ sources:
   notion:
     enabled: true
     window_days: 4
-    # Extra search words that find pages you created or edited. Notion search
-    # needs a query; common words in your workspace work best.
-    search_terms: ["the", "a"]
     # Databases you want watched (name + the signal they carry). Saved to
     # notion/.allowlist on the first run.
     watched: []

@@ -4,9 +4,15 @@
 //
 //   discover  notion-search with the spec's signals, unioned by page id:
 //             last_edited_by me · created_by me · mentions (owner.name from config.yaml)
-//             (search needs a non-empty query; sources.notion.search_terms
-//             are the catch-alls, e.g. "the", "a" and the company name;
-//             measured 2026-10-01: "*" returns nothing)
+//             (the two "by me" searches send an empty query: notion-search
+//             accepts one with filters and sort: last_edited, measured
+//             2026-11-02. Catch-all words like "the" showed in the
+//             workspace's search logs; "*" returns nothing, 2026-10-01)
+//             "mentioned" is a text search for owner.name. Measured
+//             2026-11-02: it finds @-tags and plain-name text in the page
+//             body, but NOT a Person property (Owner, Requester) that names
+//             the owner, and NOT an @-tag that is only in a comment. The
+//             connector has no inbox or notifications tool to close this.
 //   detail    notion-fetch (page body + properties) + notion-get-comments
 //   render    existing raw format; body = the connector's enhanced markdown
 //   gate      sync.verify ─▶ sync.commit (hash skip) ─▶ watermark if complete
@@ -248,9 +254,6 @@ async function syncNotionMcp(run, ctx) {
   const { vault, logLine, finish, src } = ctx;
   const log = (s) => logLine(run, s);
   const T = (name) => tool(vault, 'notion', name);
-  // Notion search needs a query; common words find the owner's pages
-  // (config.yaml sources.notion.search_terms; a company name works well).
-  const CATCHALL = getConfig(vault).sources.notion.search_terms.map(String);
   let owner;
   try { owner = requireOwner(vault, ['notion_user_id', 'name']); } catch (e) { return finish(run, 'error', e.message); }
   const me = owner.notion_user_id;
@@ -270,8 +273,8 @@ async function syncNotionMcp(run, ctx) {
   // 1. Discover. Each signal is its own search; reasons are merged per page.
   const range = { last_edited_date_range: { start_date: startDate } };
   const signals = [
-    ...CATCHALL.map((query) => ({ reason: 'last_edited_by_me', args: { query, filters: { edited_by_user_ids: [me], ...range }, page_size: 50, sort: 'last_edited', max_highlight_length: 0 } })),
-    ...CATCHALL.map((query) => ({ reason: 'created_by_me', args: { query, filters: { created_by_user_ids: [me], ...range }, page_size: 50, sort: 'last_edited', max_highlight_length: 0 } })),
+    { reason: 'last_edited_by_me', args: { query: '', filters: { edited_by_user_ids: [me], ...range }, page_size: 50, sort: 'last_edited', max_highlight_length: 0 } },
+    { reason: 'created_by_me', args: { query: '', filters: { created_by_user_ids: [me], ...range }, page_size: 50, sort: 'last_edited', max_highlight_length: 0 } },
     { reason: 'mentioned', args: { query: owner.name, filters: { ...range }, page_size: 50, sort: 'last_edited', max_highlight_length: 0 } },
   ];
   // notion-search returns at most page_size results and no cursor; a full
@@ -281,7 +284,7 @@ async function syncNotionMcp(run, ctx) {
   const pages = new Map(); // flat id -> { id, title, url, timestamp, reasons:Set }
   for (const s of signals) {
     const hits = disc.results.get(disc.keyOf(s.args)) || [];
-    if (hits.length >= 50) log(`note: "${s.args.query}" (${s.reason}) returned a full page of 50; results beyond it may be missed`);
+    if (hits.length >= 50) log(`note: ${s.reason} search returned a full page of 50; results beyond it may be missed`);
     for (const h of hits) {
       if (h.type && h.type !== 'page') continue;
       if (tsDay(h.timestamp) < startDate) continue;

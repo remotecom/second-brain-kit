@@ -270,3 +270,16 @@ test('ingest: the transcript text reaches the entries, and the diff of a backfil
   assert.ok(d.includes('point 0 about') && d.includes('point 999 about'));
   assert.match(d, /Lines removed since the last ingest:\n- Transcript omitted/);
 });
+
+test('sync: discovery sends 3 searches, the two "by me" ones with an empty query and no catch-all words', async () => {
+  const v = fakeVault();
+  const calls = connector();
+  const { done, lines } = await runSync(v);
+  assert.equal(done.status, 'ok', `${done.summary}\n${lines.join('\n')}`);
+  const s = calls.filter((c) => c.name === 'notion-search').map((c) => c.args);
+  assert.equal(s.length, 3);
+  const byMe = s.filter((a) => a.filters.edited_by_user_ids || a.filters.created_by_user_ids);
+  assert.equal(byMe.length, 2);
+  for (const a of byMe) { assert.equal(a.query, ''); assert.equal(a.sort, 'last_edited'); }
+  assert.ok(!s.some((a) => ['the', 'a', 'Remote'].includes(a.query)), 'no catch-all word reaches the search log');
+});
